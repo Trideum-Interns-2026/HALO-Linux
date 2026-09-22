@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # HALO
 Repo for the HALO drone project
 
@@ -29,7 +28,3 @@ For the Movement folder:
 ```powershell
 python run_all.py Movement test_takeoff.cpp
 ```
-=======
-# HALO-Linux
-Repo for the new updated project for Linux
->>>>>>> 2454a925376b6ab77662b89f10a1d5fd6c4bb2d5
