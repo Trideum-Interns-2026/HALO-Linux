@@ -1,0 +1,31 @@
+# WSLg override (Windows 11 / recent Windows 10, run from inside a WSL2
+# Ubuntu terminal — NOT PowerShell). WSLg provides a native, GPU-accelerated
+# X11/Wayland display built into WSL2, unlike VcXsrv which is software-only.
+#
+# Usage (from inside WSL2 Ubuntu, in this folder):
+#   docker compose -f docker-compose.yml -f docker-compose.wsl.yml run --rm px4-sitl
+#
+# No VcXsrv needed — close it if it's running, it's not used here.
+
+services:
+  px4-sitl:
+    network_mode: host
+    environment:
+      # WSLg sets DISPLAY automatically inside the WSL2 environment —
+      # pass it straight through rather than hardcoding it.
+      - DISPLAY=${DISPLAY}
+      # Points Mesa at WSLg's D3D12 driver, which is how OpenGL rendering
+      # gets GPU-accelerated under WSLg (a different path than the usual
+      # nvidia-container-toolkit/--gpus, which only covers CUDA compute).
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # WSLg also exposes GPU device nodes here for accelerated rendering.
+      - /mnt/wslg:/mnt/wslg
+      # The actual GPU driver libraries WSLg's Mesa D3D12 driver needs.
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+    devices:
+      # The DXCore device node — required for GPU-accelerated rendering
+      # under WSLg. Without this, rendering silently falls back to
+      # software (llvmpipe), which is what's producing the low FPS.
+      - /dev/dxg:/dev/dxg

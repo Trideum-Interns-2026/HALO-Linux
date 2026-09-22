@@ -1,0 +1,9 @@
+# Used only by the VS Code Dev Container — layers on top of the main
+# docker-compose.yml. Overrides the entrypoint so the container just stays
+# idle instead of auto-building/launching PX4 + Gazebo on start, since for
+# development you want a shell, not the sim running immediately.
+
+services:
+  px4-sitl:
+    entrypoint: []
+    command: sleep infinity

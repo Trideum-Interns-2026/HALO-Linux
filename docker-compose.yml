@@ -1,0 +1,23 @@
+# Base config shared by every platform. Platform-specific bits (display
+# forwarding, GPU access, networking quirks) live in the override files
+# below — pick the one matching where you're running.
+
+services:
+  px4-sitl:
+    build:
+      context: .
+      args:
+        PX4_TARGET: gazebo-classic_typhoon_h480
+    image: px4-sitl-dev:latest
+    privileged: true
+    volumes:
+      - px4-workspace:/PX4-Autopilot
+      # Your own code (this repo) — kept completely separate from
+      # PX4-Autopilot's source tree so there's no risk of mixing them up.
+      - .:/workspace
+    working_dir: /PX4-Autopilot
+    stdin_open: true
+    tty: true
+
+volumes:
+  px4-workspace:
