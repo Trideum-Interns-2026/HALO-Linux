@@ -1,3 +1,10 @@
 {
-    "cmake.sourceDirectory": "/workspace/Movement"
+    "cmake.sourceDirectory": "/workspace/Movement",
+    "python.autoComplete.extraPaths": [
+        "/opt/ros/foxy/lib/python3.8/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/opt/ros/foxy/lib/python3.8/site-packages"
+    ],
+    "ROS2.distro": "foxy"
 }

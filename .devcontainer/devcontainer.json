@@ -23,18 +23,19 @@
         "ms-vscode.cmake-tools",
         "twxs.cmake",
         "ms-python.python",
-        "ms-iot.vscode-ros",
+        "ranch-hand-robotics.rde-ros-2",
         "streetsidesoftware.code-spell-checker"
       ],
       "settings": {
-        "cmake.configureOnOpen": false
+        "cmake.configureOnOpen": false,
+        "ros.distro": "foxy"
       }
     }
   },
 
   // Runs once after the container is created — makes sure the source is
   // present (in case this is a brand new volume) without launching Gazebo.
-  "postCreateCommand": "test -f /PX4-Autopilot/Makefile || git clone --recurse-submodules https://github.com/PX4/PX4-Autopilot.git /PX4-Autopilot; grep -q 'alias fly=' /etc/bash.bashrc || echo \"alias fly='cd /PX4-Autopilot && make px4_sitl gazebo-classic_typhoon_h480'\" >> /etc/bash.bashrc",
+"postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
 
   "remoteUser": "root"
 }
