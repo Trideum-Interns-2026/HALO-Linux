@@ -11,8 +11,40 @@
 
 FROM px4io/px4-dev-ros2-foxy
 
+# Set explicitly (not just sourced in .bashrc) so it's visible to any
+# process that attaches to the container, including the VS Code ROS
+# extension's non-interactive shell — otherwise it can't auto-detect the
+# distro ("unable to determine ROS 2 distro").
+ENV ROS_DISTRO=foxy
+ENV ROS_LOCALHOST_ONLY=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# The base image's packages.ros.org signing key has since expired
+# (upstream ROS apt-key rotation, unrelated to this repo) — apt-get update
+# fails on that repo with EXPKEYSIG until it's refreshed. Fetch the current
+# keyring, then point every ros*/ros2* sources.list.d entry at it via
+# signed-by (works whether the image already used signed-by with a
+# different path, or the older unqualified apt-key/trusted.gpg.d form).
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && for f in /etc/apt/sources.list.d/*ros*; do \
+        grep -q 'signed-by=/usr/share/keyrings/ros-archive-keyring.gpg' "$f" || \
+        sed -i -E 's#^deb (\[[^]]*\] *)?#deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] #' "$f"; \
+    done
+
+# gazebo_ros_pkgs (camera/init/factory plugins) + cv_bridge/OpenCV — needed
+# for the Perception package's camera bridge (see
+# Perception/scripts/patch_gazebo_camera_bridge.py). Not part of the base
+# px4io/px4-dev-ros2-foxy image, which only ships gazebo-classic itself.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-foxy-gazebo-ros-pkgs \
+    ros-foxy-cv-bridge \
+    ros-foxy-vision-opencv \
+    python3-opencv \
+    python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 
 # MAVSDK C++ SDK — installed as a prebuilt .deb so your movement/test code

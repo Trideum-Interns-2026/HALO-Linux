@@ -2,6 +2,10 @@
 build/
 **/build/
 
+# colcon build artifacts (Perception ROS 2 package)
+install/
+log/
+
 # VS Code workspace-local settings (keep .devcontainer/, that's shared config)
 .vscode/
 !.devcontainer/

@@ -1,0 +1,5 @@
+<depend>rclcpp</depend>
+<depend>sensor_msgs</depend>
+<depend>cv_bridge</depend>
+<depend>opencv_imgproc</depend>
+<depend>opencv_highgui</depend>
