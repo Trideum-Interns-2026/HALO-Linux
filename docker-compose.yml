@@ -11,9 +11,9 @@ services:
     image: px4-sitl-dev:latest
     privileged: true
     volumes:
+      # Persistent PX4-Autopilot source, cloned/built on first run.
       - px4-workspace:/PX4-Autopilot
-      # Your own code (this repo) — kept completely separate from
-      # PX4-Autopilot's source tree so there's no risk of mixing them up.
+      # Your own code (this repo) — kept separate from PX4's source tree.
       - .:/workspace
     working_dir: /PX4-Autopilot
     stdin_open: true

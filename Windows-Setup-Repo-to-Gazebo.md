@@ -53,8 +53,8 @@ If missing: `sudo apt update && sudo apt install -y git`
 Clone into WSL2's own home folder (not `/mnt/c/...`):
 ```bash
 cd ~
-git clone https://github.com/Trideum-Interns-2026/HALO.git
-cd HALO/Docker
+git clone https://github.com/Trideum-Interns-2026/HALO-Linux.git
+cd HALO-Linux
 ```
 
 ## 4. Build the image
