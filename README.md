@@ -29,33 +29,36 @@ For the Movement folder:
 python run_all.py Movement test_takeoff.cpp
 ```
 
-Perception (vision system)
-Perception/ is a ROS 2 (ament_python) package that detects a red sphere
+# Perception (vision system)
+
+`Perception/` is a ROS 2 (ament_python) package that detects a red sphere
 from the drone's camera feed using OpenCV, and estimates distance to it.
 
-The camera bridge (Perception/scripts/patch_gazebo_camera_bridge.py) adds
-a gazebo_ros camera plugin to the typhoon_h480 model so Gazebo publishes
-the camera feed as a ROS 2 topic — /camera/front/image_raw (the front
-segment comes from the plugin's camera_name, not /camera/image_raw).
-This patch runs automatically: entrypoint.sh runs it for the standalone
-run.py path, and .devcontainer/post-create.sh runs it for the VS Code
-dev container path — they're separate flows that don't share setup, so
-anything added to one needs adding to the other too.
-perception/red_sphere_detector.py subscribes to that topic and to its
-matching /camera/front/camera_info, detects the largest red contour via
-HSV thresholding, and publishes:
-pixel centroid/radius on /red_sphere_detector/red_sphere/position
-a distance estimate in meters on /red_sphere_detector/red_sphere/distance
-(pinhole model: known sphere diameter × focal length ÷ apparent radius —
-only as accurate as the sphere_diameter_m parameter matches the actual
-target)
-a bounding-box-annotated debug image on
-/red_sphere_detector/red_sphere/debug_image
-the raw HSV threshold mask on /red_sphere_detector/red_sphere/mask_debug
-(all-black here means the color filter isn't seeing anything red —
-useful for debugging before assuming the detection logic is broken)
-Perception/models/red_sphere.sdf is a red test sphere (0.4m diameter) you
-can spawn into the running world.
-Running it
-fly — launches Gazebo.
-perceive — runs perception.
+- The camera bridge (`Perception/scripts/patch_gazebo_camera_bridge.py`) adds
+  a `gazebo_ros` camera plugin to the typhoon_h480 model so Gazebo publishes
+  the camera feed as a ROS 2 topic — `/camera/front/image_raw` (the `front`
+  segment comes from the plugin's `camera_name`, not `/camera/image_raw`).
+  This patch runs automatically: `entrypoint.sh` runs it for the standalone
+  `run.py` path, and `.devcontainer/post-create.sh` runs it for the VS Code
+  dev container path — they're separate flows that don't share setup, so
+  anything added to one needs adding to the other too.
+- `perception/red_sphere_detector.py` subscribes to that topic and to its
+  matching `/camera/front/camera_info`, detects the largest red contour via
+  HSV thresholding, and publishes:
+  - pixel centroid/radius on `/red_sphere_detector/red_sphere/position`
+  - a distance estimate in meters on `/red_sphere_detector/red_sphere/distance`
+    (pinhole model: known sphere diameter × focal length ÷ apparent radius —
+    only as accurate as the `sphere_diameter_m` parameter matches the actual
+    target)
+  - a bounding-box-annotated debug image on
+    `/red_sphere_detector/red_sphere/debug_image`
+  - the raw HSV threshold mask on `/red_sphere_detector/red_sphere/mask_debug`
+    (all-black here means the color filter isn't seeing anything red —
+    useful for debugging before assuming the detection logic is broken)
+- `Perception/models/red_sphere.sdf` is a red test sphere (0.4m diameter) you
+  can spawn into the running world.
+
+## Running it
+
+1. `fly` — launches Gazebo.
+2. `perceive` — runs perception.
