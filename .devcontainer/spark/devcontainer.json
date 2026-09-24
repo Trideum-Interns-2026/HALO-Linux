@@ -1,0 +1,43 @@
+{
+  "name": "PX4 SITL Dev Container (NVIDIA Spark)",
+
+  // Same as ../devcontainer.json, but for the NVIDIA DGX Spark (native ARM64
+  // Linux) — swaps the WSLg override for docker-compose.spark.yml, which uses
+  // nvidia-container-toolkit + plain X11 instead of WSL-only mounts.
+  "dockerComposeFile": [
+    "../../docker-compose.yml",
+    "../../docker-compose.spark.yml",
+    "../docker-compose.extend.yml"
+  ],
+  "service": "px4-sitl",
+  "workspaceFolder": "/workspace",
+  "overrideCommand": false,
+
+  // Keeps the container running after VS Code disconnects, so you don't
+  // lose your dev container between sessions.
+  "shutdownAction": "none",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        "ms-python.python",
+        "ranch-hand-robotics.rde-ros-2",
+        "streetsidesoftware.code-spell-checker"
+      ],
+      "settings": {
+        "cmake.configureOnOpen": false,
+        "ros.distro": "jazzy"
+      }
+    }
+  },
+
+  // Runs once after the container is created — builds the Perception
+  // package and sets up shell aliases, without launching Gazebo.
+  "postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
+
+  "remoteUser": "root"
+}

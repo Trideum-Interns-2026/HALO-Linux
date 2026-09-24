@@ -25,7 +25,7 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all,graphics
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     deploy:
