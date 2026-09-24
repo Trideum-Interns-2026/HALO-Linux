@@ -25,6 +25,8 @@ if [ -d /workspace/Perception ]; then
     (cd /opt/ros2_ws && colcon build --packages-select perception --symlink-install)
 fi
 
+ln -sfn /workspace/scripts/track /usr/local/bin/track
+
 # Make `fly`, ROS 2, and the Perception overlay available in every new
 # terminal VS Code opens (they don't inherit anything from entrypoint.sh).
 grep -q "alias fly=" /etc/bash.bashrc || \
@@ -37,3 +39,5 @@ grep -q "ros2_ws/install/setup.bash" /etc/bash.bashrc || \
     echo "alias spawn_sphere='/workspace/Perception/scripts/spawn_sphere.sh'" >> /etc/bash.bashrc
     grep -q "alias perceive=" /etc/bash.bashrc || \
     echo "alias perceive='/workspace/Perception/scripts/run_perception_demo.sh'" >> /etc/bash.bashrc
+    grep -q "alias track=" /etc/bash.bashrc || \
+        echo "alias track='/workspace/scripts/track'" >> /etc/bash.bashrc

@@ -52,6 +52,30 @@ public:
         sendMessage(msg);
     }
 
+    void sendRoiLocation(double lat, double lon, float alt,
+                         uint8_t target_system, uint8_t target_component) {
+        mavlink_message_t msg;
+        mavlink_msg_command_int_pack(
+            1,
+            200,
+            &msg,
+            target_system,
+            target_component,
+            MAV_FRAME_GLOBAL,
+            MAV_CMD_DO_SET_ROI_LOCATION,
+            0,
+            0,
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            static_cast<int32_t>(lat * 1e7),
+            static_cast<int32_t>(lon * 1e7),
+            alt);
+
+        sendMessage(msg);
+    }
+
 private:
     uint32_t getTimeBootMs() {
         return static_cast<uint32_t>(
@@ -62,6 +86,10 @@ private:
     }
 
     void sendMessage(const mavlink_message_t& msg) {
+        if (sock_ < 0) {
+            return;
+        }
+
         uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
         int len = mavlink_msg_to_send_buffer(buffer, &msg);
 
@@ -69,7 +97,7 @@ private:
                reinterpret_cast<struct sockaddr*>(&addr_), sizeof(addr_));
     }
 
-    int sock_;
+    int sock_{-1};
     struct sockaddr_in addr_;
 };
 

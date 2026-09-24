@@ -109,7 +109,8 @@ private:
     }
 
     void processMeasurementLocked() {
-        if (!have_pixel_ || !have_distance_ || !have_camera_info_) {
+        if (!have_pixel_ || !have_distance_ || !have_camera_info_ ||
+            !have_vehicle_telemetry_) {
             return;
         }
 
@@ -137,18 +138,31 @@ private:
         const double east_camera = latest_distance_m_ * right;
         const double north = north_camera * std::cos(heading) - east_camera * std::sin(heading);
         const double east = north_camera * std::sin(heading) + east_camera * std::cos(heading);
+        if (!filter_reference_set_) {
+            filter_reference_latitude_ = vehicle_latitude_;
+            filter_reference_longitude_ = vehicle_longitude_;
+            filter_reference_set_ = true;
+        }
+
+        const double vehicle_north =
+            (vehicle_latitude_ - filter_reference_latitude_) * 111111.0;
+        const double vehicle_east =
+            (vehicle_longitude_ - filter_reference_longitude_) *
+            (111111.0 * std::cos(degToRad(filter_reference_latitude_)));
+        const double target_north = vehicle_north + north;
+        const double target_east = vehicle_east + east;
 
         if (initialized_) {
             predict(dt);
         } else {
             state_.setZero();
-            state_(0) = north;
-            state_(1) = east;
+            state_(0) = target_north;
+            state_(1) = target_east;
             covariance_ = Eigen::Matrix4d::Identity();
             initialized_ = true;
         }
 
-        update(Eigen::Vector2d(north, east));
+        update(Eigen::Vector2d(target_north, target_east));
         target_down_m_ = target_down;
         last_measurement_time_ = stamp;
         last_target_time_ = now();
@@ -179,14 +193,26 @@ private:
 
     void publishRoi() {
         std::lock_guard<std::mutex> lock(data_mutex_);
-        if (!initialized_ || (now() - last_target_time_).seconds() > 2.0) {
+        if (!have_vehicle_telemetry_ || !initialized_ ||
+            (now() - last_target_time_).seconds() > 2.0) {
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for vehicle telemetry and a fresh target detection "
+                "(vehicle %.7f, %.7f, %.1fm)",
+                vehicle_latitude_, vehicle_longitude_, vehicle_altitude_m_);
             return;
         }
 
-        const double latitude = vehicle_latitude_ + state_(0) / 111111.0;
-        const double longitude = vehicle_longitude_ +
-            state_(1) / (111111.0 * std::cos(degToRad(vehicle_latitude_)));
+        const double latitude = filter_reference_latitude_ + state_(0) / 111111.0;
+        const double longitude = filter_reference_longitude_ +
+            state_(1) / (111111.0 * std::cos(degToRad(filter_reference_latitude_)));
         const double altitude = vehicle_altitude_m_ - target_down_m_;
+
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "DRONE lat=%.7f lon=%.7f alt=%.2fm | TARGET lat=%.7f lon=%.7f alt=%.2fm | distance=%.2fm",
+            vehicle_latitude_, vehicle_longitude_, vehicle_altitude_m_,
+            latitude, longitude, altitude, latest_distance_m_);
 
         sender_->sendRoiLocation(
             latitude,
@@ -210,6 +236,7 @@ private:
                 vehicle_latitude_ = position.latitude_deg;
                 vehicle_longitude_ = position.longitude_deg;
                 vehicle_altitude_m_ = position.absolute_altitude_m;
+                have_vehicle_telemetry_ = true;
             });
             telemetry_->subscribe_heading([this](mavsdk::Telemetry::Heading heading) {
                 std::lock_guard<std::mutex> lock(data_mutex_);
@@ -246,6 +273,8 @@ private:
     double vehicle_altitude_m_{0.0};
     double vehicle_heading_deg_{0.0};
     double target_down_m_{0.0};
+    double filter_reference_latitude_{0.0};
+    double filter_reference_longitude_{0.0};
     rclcpp::Time last_measurement_time_;
     rclcpp::Time last_target_time_;
     Eigen::Vector4d state_;
@@ -255,6 +284,8 @@ private:
     bool have_pixel_{false};
     bool have_distance_{false};
     bool have_camera_info_{false};
+    bool have_vehicle_telemetry_{false};
+    bool filter_reference_set_{false};
     bool initialized_{false};
 };
 
