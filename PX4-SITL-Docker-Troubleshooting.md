@@ -6,7 +6,7 @@ getting it running, so the next person doesn't have to rediscover all of this.
 ## Prerequisites (one-time, on the host)
 
 - Docker Desktop running (WSL2 backend enabled)
-- VcXsrv running: Multiple windows, Display number `0`, Disable access control
+- WSLg available in the WSL2 distribution used to launch Docker
 - QGroundControl installed and open
 
 ## The basic workflow
