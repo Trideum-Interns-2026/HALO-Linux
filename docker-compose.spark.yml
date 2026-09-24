@@ -1,0 +1,37 @@
+# NVIDIA DGX Spark override (native ARM64 Linux — not WSL2). The Spark runs
+# Ubuntu directly with the NVIDIA driver and container toolkit installed, so
+# GPU access goes through the standard nvidia-container-toolkit device
+# reservation (Compose's equivalent of `docker run --gpus`), and display
+# forwarding is plain X11 — none of the WSLg/D3D12 translation layer in
+# docker-compose.wsl.yml (that one's Windows/WSL2-only) is needed here.
+#
+# Prerequisites on the Spark:
+#   - NVIDIA Container Toolkit installed and configured for Docker
+#     (nvidia-ctk runtime configure --runtime=docker), so `docker info`
+#     lists "nvidia" under Runtimes.
+#   - Docker allowed to connect to the local X server:
+#     `xhost +local:docker`
+#
+# Usage (from a terminal on the Spark, in this folder):
+#   docker compose -f docker-compose.yml -f docker-compose.spark.yml run --rm px4-sitl
+#
+# The base image (px4io/px4-sitl-gazebo-ros2) and this repo's Dockerfile are
+# multi-arch (amd64 + arm64) — `docker compose build` picks the arm64 image
+# and MAVSDK build automatically on the Spark, no --platform flag needed.
+
+services:
+  px4-sitl:
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

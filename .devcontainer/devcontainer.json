@@ -10,6 +10,7 @@
   ],
   "service": "px4-sitl",
   "workspaceFolder": "/workspace",
+    "overrideCommand": false,
 
   // Keeps the container running after VS Code disconnects, so you don't
   // lose your dev container between sessions.
@@ -28,14 +29,14 @@
       ],
       "settings": {
         "cmake.configureOnOpen": false,
-        "ros.distro": "foxy"
+        "ros.distro": "jazzy"
       }
     }
   },
 
-  // Runs once after the container is created — makes sure the source is
-  // present (in case this is a brand new volume) without launching Gazebo.
-"postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
+  // Runs once after the container is created — builds the Perception
+  // package and sets up shell aliases, without launching Gazebo.
+  "postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
 
   "remoteUser": "root"
 }
