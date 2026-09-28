@@ -5,6 +5,7 @@ FROM px4io/px4-sitl-gazebo-ros2:latest
 # extension's non-interactive shell — otherwise it can't auto-detect the
 # distro ("unable to determine ROS 2 distro").
 ENV ROS_DISTRO=jazzy
+ENV GZ_CONFIG_PATH="/opt/ros/jazzy/opt/gz_transport_vendor/share/gz:/opt/ros/jazzy/opt/gz_msgs_vendor/share/gz:/usr/share/gz"
 
 # colcon + cv_bridge/OpenCV + ros_gz_bridge — needed to build and run the
 # Perception ROS 2 package. Not included in this runtime-focused base image

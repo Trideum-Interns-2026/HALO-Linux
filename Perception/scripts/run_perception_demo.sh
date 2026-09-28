@@ -9,7 +9,7 @@
 # Usage: run_perception_demo.sh [x] [y] [z]   (sphere position, default 3 0 0.3)
 set -e
 
-source /opt/ros/foxy/setup.bash
+source /opt/ros/jazzy/setup.bash
 [ -f /opt/ros2_ws/install/setup.bash ] && source /opt/ros2_ws/install/setup.bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

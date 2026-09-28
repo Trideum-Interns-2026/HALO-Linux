@@ -70,17 +70,21 @@ build from source and Gazebo Classic are gone.
 2. In another terminal, `docker compose exec -e PX4_SIM_MODEL=gz_x500_depth px4-sitl /usr/local/bin/ros2-entrypoint.sh px4-gazebo`
    — starts PX4 SITL + Gazebo Harmonic with the `gz_x500_depth` vehicle (the
    X500 with an OakD-Lite depth camera; the plain `gz_x500` has no camera).
+   In a VS Code dev container terminal, `fly` does the same thing and
+   already defaults `PX4_SIM_MODEL` to `gz_x500_depth` (override it by
+   exporting `PX4_SIM_MODEL` yourself before running `fly` if you want a
+   different vehicle).
 3. `ros2 launch perception gz_harmonic_bridge.launch.py` — bridges the
    camera topics from Gazebo into ROS 2 (see the topic-name caveat above —
    check `gz topic -l` first if nothing shows up).
 4. `ros2 launch perception perception.launch.py` — runs the red-sphere
    detector against the bridged camera feed.
 
-`Perception/scripts/spawn_sphere.sh` and `run_perception_demo.sh` (the old
-one-shot "spawn a sphere and watch detection" workflow) are **stale** — they
-call `gazebo_ros`'s `spawn_entity` service, which doesn't exist in Gazebo
-Harmonic. They need porting to Harmonic's entity-spawn service before they'll
-work again.
+`Perception/scripts/spawn_sphere.sh` and `run_perception_demo.sh` (the
+one-shot "spawn a sphere and watch detection" workflow) use gz-sim's native
+`/world/default/create` and `/world/default/remove` services (via `gz
+service`) to spawn/respawn the sphere — ported from the old `gazebo_ros`
+`spawn_entity` service call, which doesn't exist in Gazebo Harmonic.
 
 ### Target tracking
 
