@@ -22,6 +22,12 @@ git config --global --get-all safe.directory | grep -qx /workspace || \
 # Defaults to gz_x500_depth (X500 + OakD-Lite depth camera) rather than
 # PX4's plain gz_x500, since Perception needs the camera feed to work at
 # all. Still overridable by exporting PX4_SIM_MODEL before running `fly`.
+#
+# The base image bakes in PX4_SIM_MODEL=gz_x500, so the `:-` fallback in the
+# alias alone never kicks in — export the depth model explicitly first (the
+# Dockerfile does too, this covers containers built before that change).
+grep -q "export PX4_SIM_MODEL=" /etc/bash.bashrc || \
+    echo "export PX4_SIM_MODEL=gz_x500_depth" >> /etc/bash.bashrc
 grep -q "alias fly=" /etc/bash.bashrc || \
     echo "alias fly='PX4_SIM_MODEL=\${PX4_SIM_MODEL:-gz_x500_depth} /usr/local/bin/ros2-entrypoint.sh px4-gazebo'" >> /etc/bash.bashrc
 grep -q "source /opt/ros/jazzy/setup.bash" /etc/bash.bashrc || \

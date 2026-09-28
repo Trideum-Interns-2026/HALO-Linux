@@ -6,6 +6,11 @@ FROM px4io/px4-sitl-gazebo-ros2:latest
 # distro ("unable to determine ROS 2 distro").
 ENV ROS_DISTRO=jazzy
 ENV GZ_CONFIG_PATH="/opt/ros/jazzy/opt/gz_transport_vendor/share/gz:/opt/ros/jazzy/opt/gz_msgs_vendor/share/gz:/usr/share/gz"
+# The base image sets PX4_SIM_MODEL=gz_x500 (no camera), which also defeats
+# the `${PX4_SIM_MODEL:-gz_x500_depth}` fallback in the `fly` alias since the
+# variable is never unset. Override it so the X500 + OakD-Lite depth camera
+# that Perception needs is the default everywhere.
+ENV PX4_SIM_MODEL=gz_x500_depth
 
 # colcon + cv_bridge/OpenCV + ros_gz_bridge — needed to build and run the
 # Perception ROS 2 package. Not included in this runtime-focused base image
