@@ -82,6 +82,19 @@ call `gazebo_ros`'s `spawn_entity` service, which doesn't exist in Gazebo
 Harmonic. They need porting to Harmonic's entity-spawn service before they'll
 work again.
 
+### Target tracking
+
+`track` (available in every devcontainer terminal) runs the Kalman filter and
+repeatedly sends the filtered target location to QGroundControl as
+`MAV_CMD_DO_SET_ROI_LOCATION`, keeping the QGroundControl ROI command updated
+while the target is visible. The same terminal displays the drone and
+filtered target coordinates once per second.
+
+Run `track` in a separate terminal after perception is running. The vehicle
+must be connected on MAVSDK UDP `14540`. QGroundControl does not persistently
+draw arbitrary map pins for ROI commands, so use the `track` terminal readout
+for the live target latitude, longitude, altitude, and distance.
+
 ## Running on the NVIDIA DGX Spark (ARM64)
 
 The base image and this repo's `Dockerfile` are multi-arch (amd64 + arm64),
