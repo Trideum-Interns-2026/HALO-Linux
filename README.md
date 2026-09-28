@@ -33,12 +33,19 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
 
 - The camera feed comes from the `gz_x500_depth` vehicle's OakD-Lite depth
   camera, bridged from Gazebo Harmonic to ROS 2 via `ros_gz_bridge`
-  (`Perception/launch/gz_harmonic_bridge.launch.py`, configured by
-  `Perception/config/gz_harmonic_camera_bridge.yaml`) onto
-  `/camera/front/image_raw` and `/camera/front/camera_info`. The Gazebo-side
-  topic names in that config are a best guess from PX4's OakD-Lite model
-  source and are **not confirmed** — after bringing the sim up, run
-  `gz topic -l` inside the container and fix them if they don't match.
+  (`Perception/launch/gz_harmonic_bridge.launch.py`) onto
+  `/camera/front/image_raw` and `/camera/front/camera_info`. The bridge finds
+  the camera's Gazebo topic in whatever world is running, and the spawn
+  scripts likewise target whichever world is running, so nothing here is
+  tied to PX4's `default` world. If a world has more than one camera, pick
+  one with `ros2 launch perception gz_harmonic_bridge.launch.py
+  gz_image_topic:=<gz topic>`; export `WORLD=<name>` to override the spawn
+  scripts' world.
+- The image is capped at 15 Hz (the Dockerfile lowers PX4's 30 Hz default),
+  and every detector only ever processes the newest frame, dropping any
+  that arrive while it's busy, so detections don't lag further and further
+  behind. Debug images are only drawn while something (e.g.
+  `rqt_image_view`) is watching them.
 - `perception/red_sphere_detector.py` subscribes to that topic and to its
   matching `/camera/front/camera_info`, detects the largest red contour via
   HSV thresholding, and publishes:
@@ -62,6 +69,11 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
     height, assuming the person is `person_height_m` = 1.9m tall — matches
     the test model)
   - an annotated debug image on `/person_detector/person/debug_image`
+- `perception/yolo_person_detector.py` does the same with YOLOv8n on the
+  NVIDIA GPU (CPU if PyTorch can't see one) — much more robust than HOG to
+  distance, pose, and viewing angle. Same topics under
+  `/yolo_person_detector/person/`. PyTorch, Ultralytics, and the model
+  weights (`/opt/yolo/yolov8n.pt`) are installed by the Dockerfile.
 - `Perception/models/standing_person.sdf` is a static standing human (mesh
   from Gazebo Fuel, downloaded to `~/.gz/fuel` on first spawn — needs
   internet once). `standing_person_marker.sdf` is the same person with a
@@ -73,7 +85,8 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
 To switch `perceive` and `track` from the sphere to a person, set
 `PERCEIVE_TARGET` in **both** terminals:
 
-- `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
+- `PERCEIVE_TARGET=person` — unmarked person, `person_detector` (HOG)
+- `PERCEIVE_TARGET=yolo_person` — unmarked person, `yolo_person_detector`
 - `PERCEIVE_TARGET=marked_person` — person with red marker,
   `red_sphere_detector` (`track` needs no variable for this one)
 

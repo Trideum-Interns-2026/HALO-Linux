@@ -14,6 +14,7 @@ import rclpy
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32
 
@@ -52,8 +53,16 @@ class RedSphereDetector(Node):
         self.bridge = CvBridge()
         self.focal_length_px = None  # populated once camera_info arrives
 
+        # Only the newest frame matters for a live tracker: BEST_EFFORT +
+        # depth 1 drops stale frames at the DDS layer instead of queueing
+        # them while the previous frame is still being processed.
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         self.image_sub = self.create_subscription(
-            Image, image_topic, self.on_image, 10
+            Image, image_topic, self.on_image, image_qos
         )
         self.camera_info_sub = self.create_subscription(
             CameraInfo, camera_info_topic, self.on_camera_info, 10
@@ -111,9 +120,17 @@ class RedSphereDetector(Node):
                 ) / (2.0 * radius)
                 self.distance_pub.publish(Float32(data=float(distance_m)))
 
-        if self.debug_image_pub is not None:
+        # Encoding 1080p debug frames isn't free — skip them unless something
+        # (e.g. rqt_image_view) is actually watching.
+        if (
+            self.debug_image_pub is not None
+            and self.debug_image_pub.get_subscription_count() > 0
+        ):
             self._publish_debug_image(frame, detection, distance_m, msg.header)
-        if self.mask_debug_pub is not None:
+        if (
+            self.mask_debug_pub is not None
+            and self.mask_debug_pub.get_subscription_count() > 0
+        ):
             self._publish_mask_debug(mask, msg.header)
 
     def _detect_red_sphere(self, frame):

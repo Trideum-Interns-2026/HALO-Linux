@@ -11,6 +11,8 @@
 #        PERCEIVE_TARGET=person run_perception_demo.sh [x] [y] [yaw]
 #          (spawns the standing person and runs person_detector instead —
 #           see spawn_person.sh for its defaults)
+#        PERCEIVE_TARGET=yolo_person run_perception_demo.sh [x] [y] [yaw]
+#          (same person, detected with YOLO on the GPU instead of HOG)
 #        PERCEIVE_TARGET=marked_person run_perception_demo.sh [x] [y] [yaw]
 #          (standing person with a red chest marker, red_sphere_detector)
 set -e
@@ -26,6 +28,12 @@ case "${PERCEIVE_TARGET:-sphere}" in
         "$SCRIPT_DIR/spawn_person.sh" "$@"
         LAUNCH_FILE=person_detection.launch.py
         DEBUG_IMAGE=/person_detector/person/debug_image
+        ;;
+    yolo_person)
+        echo ">> Spawning standing_person..."
+        "$SCRIPT_DIR/spawn_person.sh" "$@"
+        LAUNCH_FILE=yolo_person_detection.launch.py
+        DEBUG_IMAGE=/yolo_person_detector/person/debug_image
         ;;
     marked_person)
         echo ">> Spawning standing_person with red marker..."

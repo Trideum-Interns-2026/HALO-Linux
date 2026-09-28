@@ -14,12 +14,9 @@ setup(
             [
                 "launch/perception.launch.py",
                 "launch/person_detection.launch.py",
+                "launch/yolo_person_detection.launch.py",
                 "launch/gz_harmonic_bridge.launch.py",
             ],
-        ),
-        (
-            "share/" + package_name + "/config",
-            ["config/gz_harmonic_camera_bridge.yaml"],
         ),
     ],
     install_requires=["setuptools"],
@@ -32,6 +29,7 @@ setup(
         "console_scripts": [
             "red_sphere_detector = perception.red_sphere_detector:main",
             "person_detector = perception.person_detector:main",
+            "yolo_person_detector = perception.yolo_person_detector:main",
         ],
     },
 )

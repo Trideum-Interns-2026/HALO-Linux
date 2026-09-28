@@ -13,10 +13,15 @@ build_dir="${repo_dir}/build"
 cmake -S "${repo_dir}" -B "${build_dir}"
 cmake --build "${build_dir}" --target main
 # Follow whichever detector `perceive` started (same PERCEIVE_TARGET switch).
-if [[ "${PERCEIVE_TARGET:-sphere}" == "person" ]]; then
+case "${PERCEIVE_TARGET:-sphere}" in
+    person) detector=/person_detector/person ;;
+    yolo_person) detector=/yolo_person_detector/person ;;
+    *) detector="" ;;
+esac
+if [[ -n "${detector}" ]]; then
     exec "${build_dir}/main" --ros-args \
-        -p position_topic:=/person_detector/person/position \
-        -p distance_topic:=/person_detector/person/distance \
+        -p position_topic:=${detector}/position \
+        -p distance_topic:=${detector}/distance \
         "$@"
 fi
 exec "${build_dir}/main" "$@"

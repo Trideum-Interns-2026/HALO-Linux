@@ -53,4 +53,37 @@ RUN case "$TARGETARCH" in \
     && rm -f /tmp/mavsdk.deb \
     && rm -rf /var/lib/apt/lists/*
 
+# YOLO person detection (Perception/perception/yolo_person_detector.py):
+# PyTorch (NVIDIA CUDA build) + Ultralytics, with the YOLOv8n weights baked
+# into the image so the node never needs internet at runtime.
+#
+# - cu128 is the oldest CUDA build that supports Blackwell GPUs (the dev
+#   laptop's RTX PRO 1000 and the DGX Spark), and download.pytorch.org
+#   publishes it for both amd64 and arm64.
+# - --break-system-packages: Ubuntu 24.04 refuses system-wide pip installs
+#   otherwise (PEP 668). There's no venv to use instead — the ROS nodes run
+#   on the system python3.
+# - numpy<2: cv_bridge and the rest of the apt-installed ROS Python stack
+#   are built against numpy 1.x and break on import under numpy 2, which
+#   Ultralytics would otherwise pull in.
+# - Ultralytics also pulls in pip's opencv-python, which would shadow the
+#   apt python3-opencv every other node uses. Removed so everything shares
+#   the one apt cv2.
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+RUN pip3 install --no-cache-dir --break-system-packages \
+        --index-url "$TORCH_INDEX_URL" torch torchvision \
+    && pip3 install --no-cache-dir --break-system-packages "numpy<2" ultralytics \
+    && (pip3 uninstall -y --break-system-packages opencv-python opencv-python-headless || true) \
+    && mkdir -p /opt/yolo \
+    && cd /opt/yolo \
+    && python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+
+# The OakD-Lite color camera (IMX214) renders 1920x1080 at 30 Hz, which is
+# ~180 MB/s through the ROS bridge — more than the detectors can use, and a
+# big part of the camera pipeline's lag. 15 Hz is plenty for tracking a
+# person. Only the first <update_rate> in the model is the IMX214; the depth
+# camera after it is left alone.
+RUN sed -i '0,/<update_rate>30<\/update_rate>/s//<update_rate>15<\/update_rate>/' \
+        /opt/px4-gazebo/share/gz/models/OakD-Lite/model.sdf
+
 WORKDIR /workspace

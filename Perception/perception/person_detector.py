@@ -17,6 +17,7 @@ import rclpy
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32
 
@@ -58,10 +59,15 @@ class PersonDetector(Node):
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
-        # Queue depth 1: HOG is slower than the camera's 30 FPS, so always
-        # work on the newest frame and drop the backlog instead of falling
-        # further and further behind.
-        self.image_sub = self.create_subscription(Image, image_topic, self.on_image, 1)
+        # Only the newest frame matters for a live tracker: BEST_EFFORT +
+        # depth 1 drops stale frames at the DDS layer instead of queueing
+        # them while the previous frame is still being processed.
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.image_sub = self.create_subscription(Image, image_topic, self.on_image, image_qos)
         self.camera_info_sub = self.create_subscription(
             CameraInfo, camera_info_topic, self.on_camera_info, 10
         )
@@ -106,7 +112,12 @@ class PersonDetector(Node):
                 distance_m = self.person_height_m * self.focal_length_px / person_px
                 self.distance_pub.publish(Float32(data=float(distance_m)))
 
-        if self.debug_image_pub is not None:
+        # Encoding a 1080p debug frame isn't free — skip it unless something
+        # (e.g. rqt_image_view) is actually watching.
+        if (
+            self.debug_image_pub is not None
+            and self.debug_image_pub.get_subscription_count() > 0
+        ):
             self._publish_debug_image(frame, detection, distance_m, msg.header)
 
     def _detect_person(self, frame):
