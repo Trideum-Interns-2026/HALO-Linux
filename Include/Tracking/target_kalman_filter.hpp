@@ -41,7 +41,7 @@ public:
         declare_parameter("vehicle_heading_deg", 0.0);
         declare_parameter("camera_yaw_offset_deg", 0.0);
         declare_parameter("camera_pitch_offset_deg", 0.0);
-        declare_parameter("target_system_id", 1);
+        declare_parameter("target_system_id", 2);
         declare_parameter("target_component_id", 1);
 
         vehicle_latitude_ = get_parameter("vehicle_latitude").as_double();
@@ -214,12 +214,22 @@ private:
             vehicle_latitude_, vehicle_longitude_, vehicle_altitude_m_,
             latitude, longitude, altitude, latest_distance_m_);
 
+        const uint8_t target_system = static_cast<uint8_t>(get_parameter("target_system_id").as_int());
+        const uint8_t target_component = static_cast<uint8_t>(get_parameter("target_component_id").as_int());
+
+        sender_->sendTargetPosition(
+            latitude,
+            longitude,
+            static_cast<float>(altitude),
+            target_system,
+            target_component);
+
         sender_->sendRoiLocation(
             latitude,
             longitude,
             static_cast<float>(altitude),
-            static_cast<uint8_t>(get_parameter("target_system_id").as_int()),
-            static_cast<uint8_t>(get_parameter("target_component_id").as_int()));
+            target_system,
+            target_component);
     }
 
     void connectTelemetry() {
