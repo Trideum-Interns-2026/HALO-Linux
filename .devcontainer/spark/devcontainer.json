@@ -1,16 +1,17 @@
 {
-  "name": "PX4 SITL Dev Container",
+  "name": "PX4 SITL Dev Container (NVIDIA Spark)",
 
-  // Reuses the same image/build as the normal run setup, plus an override
-  // that stops it from auto-launching the sim on start.
+  // Same as ../devcontainer.json, but for the NVIDIA DGX Spark (native ARM64
+  // Linux) — swaps the WSLg override for docker-compose.spark.yml, which uses
+  // nvidia-container-toolkit + plain X11 instead of WSL-only mounts.
   "dockerComposeFile": [
-    "../docker-compose.yml",
-    "../docker-compose.wsl.yml",
-    "docker-compose.extend.yml"
+    "../../docker-compose.yml",
+    "../../docker-compose.spark.yml",
+    "../docker-compose.extend.yml"
   ],
   "service": "px4-sitl",
   "workspaceFolder": "/workspace",
-    "overrideCommand": false,
+  "overrideCommand": false,
 
   // Keeps the container running after VS Code disconnects, so you don't
   // lose your dev container between sessions.

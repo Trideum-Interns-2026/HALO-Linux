@@ -8,7 +8,7 @@ Officers often face dangerous situations where human lives are at risk. To assis
 Docker
 WSL2
 Ubuntu
-ROS 2 foxy
+ROS 2 jazzy
 QGroundControl
 
 # Running C++ programs
@@ -31,14 +31,14 @@ The search is recursive, so only the first folder is required.
 `Perception/` is a ROS 2 (ament_python) package that detects a red sphere
 from the drone's camera feed using OpenCV, and estimates distance to it.
 
-- The camera bridge (`Perception/scripts/patch_gazebo_camera_bridge.py`) adds
-  a `gazebo_ros` camera plugin to the typhoon_h480 model so Gazebo publishes
-  the camera feed as a ROS 2 topic — `/camera/front/image_raw` (the `front`
-  segment comes from the plugin's `camera_name`, not `/camera/image_raw`).
-  This patch runs automatically: `entrypoint.sh` runs it for the standalone
-  `run.py` path, and `.devcontainer/post-create.sh` runs it for the VS Code
-  dev container path — they're separate flows that don't share setup, so
-  anything added to one needs adding to the other too.
+- The camera feed comes from the `gz_x500_depth` vehicle's OakD-Lite depth
+  camera, bridged from Gazebo Harmonic to ROS 2 via `ros_gz_bridge`
+  (`Perception/launch/gz_harmonic_bridge.launch.py`, configured by
+  `Perception/config/gz_harmonic_camera_bridge.yaml`) onto
+  `/camera/front/image_raw` and `/camera/front/camera_info`. The Gazebo-side
+  topic names in that config are a best guess from PX4's OakD-Lite model
+  source and are **not confirmed** — after bringing the sim up, run
+  `gz topic -l` inside the container and fix them if they don't match.
 - `perception/red_sphere_detector.py` subscribes to that topic and to its
   matching `/camera/front/camera_info`, detects the largest red contour via
   HSV thresholding, and publishes:
@@ -65,7 +65,37 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
   QGroundControl ROI command updated while the target is visible. The same
   terminal displays the drone and filtered target coordinates once per second.
 
-Run `track` in a separate terminal after `perceive` is running. The vehicle
+Run `track` in a separate terminal after perception is running. The vehicle
 must be connected on MAVSDK UDP `14540`. QGroundControl does not persistently
 draw arbitrary map pins for ROI commands, so use the `track` terminal readout
 for the live target latitude, longitude, altitude, and distance.
+
+## Running on the NVIDIA DGX Spark (ARM64)
+
+The base image and this repo's `Dockerfile` are multi-arch (amd64 + arm64),
+so the same `docker compose build` produces a native arm64 image on the
+Spark — no `--platform` flag needed, and the MAVSDK install step picks the
+matching arm64 release asset automatically.
+
+The only thing that differs on the Spark is GPU/display forwarding, which
+`docker-compose.spark.yml` handles: real GPU passthrough via the NVIDIA
+Container Toolkit (Compose's device-reservation equivalent of
+`docker run --gpus`) plus plain X11, instead of the Windows/WSL2-only
+WSLg/D3D12 setup in `docker-compose.wsl.yml`.
+
+One-time setup on the Spark:
+
+1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   and configure it for Docker: `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
+   Confirm it's picked up with `docker info | grep -i nvidia` (should list
+   `nvidia` under Runtimes).
+2. Allow Docker to connect to the local X server: `xhost +local:docker`.
+
+Then, from this folder on the Spark:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.spark.yml build
+docker compose -f docker-compose.yml -f docker-compose.spark.yml run --rm px4-sitl
+```
+
+From there, the workflow is the same as the "Running it" section above.

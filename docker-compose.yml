@@ -1,23 +1,12 @@
-# Base config shared by every platform. Platform-specific bits (display
-# forwarding, GPU access, networking quirks) live in the override files
-# below — pick the one matching where you're running.
-
 services:
   px4-sitl:
     build:
       context: .
-      args:
-        PX4_TARGET: gazebo-classic_typhoon_h480
     image: px4-sitl-dev:latest
     privileged: true
     volumes:
-      # Persistent PX4-Autopilot source, cloned/built on first run.
-      - px4-workspace:/PX4-Autopilot
-      # Your own code (this repo) — kept separate from PX4's source tree.
       - .:/workspace
-    working_dir: /PX4-Autopilot
+    working_dir: /workspace
     stdin_open: true
     tty: true
-
-volumes:
-  px4-workspace:
+    command: ["MicroXRCEAgent", "udp4", "-p", "8888"]

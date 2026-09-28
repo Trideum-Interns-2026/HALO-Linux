@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-source /opt/ros/foxy/setup.bash
+source /opt/ros/jazzy/setup.bash
 if [[ -f /opt/ros2_ws/install/setup.bash ]]; then
     source /opt/ros2_ws/install/setup.bash
 fi
