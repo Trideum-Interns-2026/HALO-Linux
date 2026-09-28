@@ -11,17 +11,20 @@ services:
   px4-sitl:
     network_mode: host
     environment:
-      # WSLg sets DISPLAY automatically inside the WSL2 environment —
-      # pass it straight through rather than hardcoding it.
+      # WSLg provides both Xwayland and Wayland. Pass the runtime through
+      # so GUI applications do not depend on VcXsrv or another X server.
       - DISPLAY=${DISPLAY}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
+      - PULSE_SERVER=unix:/mnt/wslg/PulseServer
       # Points Mesa at WSLg's D3D12 driver, which is how OpenGL rendering
       # gets GPU-accelerated under WSLg (a different path than the usual
       # nvidia-container-toolkit/--gpus, which only covers CUDA compute).
       - LD_LIBRARY_PATH=/usr/lib/wsl/lib
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # WSLg also exposes GPU device nodes here for accelerated rendering.
-      - /mnt/wslg:/mnt/wslg
+      # WSLg's Wayland socket, Xwayland display, and audio runtime.
+      - /mnt/wslg:/mnt/wslg:rw
       # The actual GPU driver libraries WSLg's Mesa D3D12 driver needs.
       - /usr/lib/wsl:/usr/lib/wsl:ro
     devices:

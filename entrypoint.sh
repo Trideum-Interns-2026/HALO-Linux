@@ -36,6 +36,9 @@ cd /PX4-Autopilot
 pip3 install --no-cache-dir mavsdk --quiet
 
 if [ "$TARGET" = "bash" ] || [ "$TARGET" = "shell" ]; then
+    ln -sfn /workspace/scripts/track /usr/local/bin/track
+    grep -q "alias track=" /etc/bash.bashrc || \
+        echo "alias track='/workspace/scripts/track'" >> /etc/bash.bashrc
     exec /bin/bash
 fi
 
