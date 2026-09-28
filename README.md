@@ -3,12 +3,13 @@ Repo for the HALO drone project
 
 Officers often face dangerous situations where human lives are at risk. To assist the police department, we will use a drone to allow officers to monitor areas that could be dangerous for a person. Our goal is to design and test a drone system within budget, capable of safely assisting the Police Department with target pursuit operations and surveillance through QGroundControl simulation algorithms.
 
-keane test commit
-yo im will
-Cohen updated the read-me
-Brooks updated the read-me
 
-
+# Prerequisites
+Docker
+WSL2
+Ubuntu
+ROS 2 foxy
+QGroundControl
 
 # Running C++ programs
 From the repository root, run:
@@ -17,17 +18,13 @@ From the repository root, run:
 python run_all.py <folder> <file.cpp>
 ```
 
-The folder search is recursive, so this runs the file inside the Geolocation subfolder:
+For example:
 
 ```powershell
-python run_all.py Tracking_Geolocation takeoff_forward_back.cpp
+python run_all.py Src takeoff_forward_back.cpp
 ```
+The search is recursive, so only the first folder is required.
 
-For the Movement folder:
-
-```powershell
-python run_all.py Movement test_takeoff.cpp
-```
 
 # Perception (vision system)
 
@@ -60,39 +57,13 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
 
 ## Running it
 
-The sim stack is [px4io/px4-sitl-gazebo-ros2](https://hub.docker.com/r/px4io/px4-sitl-gazebo-ros2)
-(PX4 SITL + Gazebo Harmonic + ROS 2 Jazzy + Micro XRCE-DDS Agent), built via
-the repo's `Dockerfile`/`docker-compose.yml`. There is no other stack —
-build from source and Gazebo Classic are gone.
-
-1. `docker compose up` — builds the image (first run) and starts the
-   container, which launches the Micro XRCE-DDS Agent.
-2. In another terminal, `docker compose exec -e PX4_SIM_MODEL=gz_x500_depth px4-sitl /usr/local/bin/ros2-entrypoint.sh px4-gazebo`
-   — starts PX4 SITL + Gazebo Harmonic with the `gz_x500_depth` vehicle (the
-   X500 with an OakD-Lite depth camera; the plain `gz_x500` has no camera).
-   In a VS Code dev container terminal, `fly` does the same thing and
-   already defaults `PX4_SIM_MODEL` to `gz_x500_depth` (override it by
-   exporting `PX4_SIM_MODEL` yourself before running `fly` if you want a
-   different vehicle).
-3. `ros2 launch perception gz_harmonic_bridge.launch.py` — bridges the
-   camera topics from Gazebo into ROS 2 (see the topic-name caveat above —
-   check `gz topic -l` first if nothing shows up).
-4. `ros2 launch perception perception.launch.py` — runs the red-sphere
-   detector against the bridged camera feed.
-
-`Perception/scripts/spawn_sphere.sh` and `run_perception_demo.sh` (the
-one-shot "spawn a sphere and watch detection" workflow) use gz-sim's native
-`/world/default/create` and `/world/default/remove` services (via `gz
-service`) to spawn/respawn the sphere — ported from the old `gazebo_ros`
-`spawn_entity` service call, which doesn't exist in Gazebo Harmonic.
-
-### Target tracking
-
-`track` (available in every devcontainer terminal) runs the Kalman filter and
-repeatedly sends the filtered target location to QGroundControl as
-`MAV_CMD_DO_SET_ROI_LOCATION`, keeping the QGroundControl ROI command updated
-while the target is visible. The same terminal displays the drone and
-filtered target coordinates once per second.
+1. Open QGroundControl
+2. `fly` — launches Gazebo.
+3. In a new terminal, enter the command `perceive` — this runs perception code.
+4. In a new terminal, enter the command `track` — runs the Kalman filter and repeatedly sends the filtered target
+  location to QGroundControl as `MAV_CMD_DO_SET_ROI_LOCATION`, keeping the
+  QGroundControl ROI command updated while the target is visible. The same
+  terminal displays the drone and filtered target coordinates once per second.
 
 Run `track` in a separate terminal after perception is running. The vehicle
 must be connected on MAVSDK UDP `14540`. QGroundControl does not persistently
