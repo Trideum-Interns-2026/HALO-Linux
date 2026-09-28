@@ -11,7 +11,11 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         (
             "share/" + package_name + "/launch",
-            ["launch/perception.launch.py", "launch/gz_harmonic_bridge.launch.py"],
+            [
+                "launch/perception.launch.py",
+                "launch/person_detection.launch.py",
+                "launch/gz_harmonic_bridge.launch.py",
+            ],
         ),
         (
             "share/" + package_name + "/config",
@@ -27,6 +31,7 @@ setup(
     entry_points={
         "console_scripts": [
             "red_sphere_detector = perception.red_sphere_detector:main",
+            "person_detector = perception.person_detector:main",
         ],
     },
 )

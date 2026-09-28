@@ -54,6 +54,28 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
     useful for debugging before assuming the detection logic is broken)
 - `Perception/models/red_sphere.sdf` is a red test sphere (0.4m diameter) you
   can spawn into the running world.
+- `perception/person_detector.py` detects a person with no marker, using
+  OpenCV's built-in HOG people detector, and publishes on the same kinds of
+  topics as the sphere detector:
+  - pixel centroid/box height on `/person_detector/person/position`
+  - a distance estimate on `/person_detector/person/distance` (from box
+    height, assuming the person is `person_height_m` = 1.9m tall — matches
+    the test model)
+  - an annotated debug image on `/person_detector/person/debug_image`
+- `Perception/models/standing_person.sdf` is a static standing human (mesh
+  from Gazebo Fuel, downloaded to `~/.gz/fuel` on first spawn — needs
+  internet once). `standing_person_marker.sdf` is the same person with a
+  0.4m red sphere on the chest, for the red sphere detector. Spawn with
+  `spawn_person [x] [y] [yaw]` (default 5 0 0, facing the drone), or
+  `MARKER=1 spawn_person` for the marked one. Spawning it removes
+  `red_sphere`, so the detectors only ever see one target.
+
+To switch `perceive` and `track` from the sphere to a person, set
+`PERCEIVE_TARGET` in **both** terminals:
+
+- `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
+- `PERCEIVE_TARGET=marked_person` — person with red marker,
+  `red_sphere_detector` (`track` needs no variable for this one)
 
 ## Running it
 

@@ -45,6 +45,8 @@ grep -q "GZ_CONFIG_PATH" /etc/bash.bashrc || \
     echo 'export GZ_CONFIG_PATH="${GZ_CONFIG_PATH}:/usr/share/gz"' >> /etc/bash.bashrc
 grep -q "alias spawn_sphere=" /etc/bash.bashrc || \
     echo "alias spawn_sphere='/workspace/Perception/scripts/spawn_sphere.sh'" >> /etc/bash.bashrc
+grep -q "alias spawn_person=" /etc/bash.bashrc || \
+    echo "alias spawn_person='/workspace/Perception/scripts/spawn_person.sh'" >> /etc/bash.bashrc
 grep -q "alias perceive=" /etc/bash.bashrc || \
     echo "alias perceive='/workspace/Perception/scripts/run_perception_demo.sh'" >> /etc/bash.bashrc
 grep -q "alias track=" /etc/bash.bashrc || \

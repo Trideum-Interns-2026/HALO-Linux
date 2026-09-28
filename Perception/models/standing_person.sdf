@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!--
+  Standing human test target, for person_detector (no marker — see
+  standing_person_marker.sdf for the variant red_sphere_detector can track).
+
+  Reuses the "Standing person" mesh from Gazebo Fuel (downloaded and cached in
+  ~/.gz/fuel the first time it's spawned, so the first spawn needs internet),
+  but wrapped in our own static model: the Fuel model itself is a dynamic
+  80kg body that can tip over, which a still perception target shouldn't do.
+
+  The mesh is ~1.9m tall, which person_detector's person_height_m default
+  matches so its distance estimate is right for this model.
+
+  The mesh faces -y in its own frame; the link is yawed -90deg so that at
+  spawn yaw 0 the person faces world -x, i.e. back toward a drone at origin.
+-->
+<sdf version="1.6">
+  <model name="standing_person">
+    <static>true</static>
+    <link name="link">
+      <pose>0 0 0 0 0 -1.5708</pose>
+      <collision name="body">
+        <pose>0 -0.05 0.95 0 0 0</pose>
+        <geometry>
+          <box><size>0.55 0.35 1.9</size></box>
+        </geometry>
+      </collision>
+      <visual name="person">
+        <geometry>
+          <mesh>
+            <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/standing person/3/files/meshes/standing.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>
