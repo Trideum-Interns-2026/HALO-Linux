@@ -8,7 +8,7 @@ Officers often face dangerous situations where human lives are at risk. To assis
 Docker
 WSL2
 Ubuntu
-ROS 2 foxy
+ROS 2 jazzy
 QGroundControl
 
 # Running C++ programs
