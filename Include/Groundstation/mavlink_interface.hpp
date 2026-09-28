@@ -52,6 +52,39 @@ public:
         sendMessage(msg);
     }
 
+    void sendTargetPosition(double lat, double lon, float alt,
+                            uint8_t target_system, uint8_t target_component) {
+        mavlink_message_t heartbeat_msg;
+        mavlink_msg_heartbeat_pack(
+            target_system,
+            target_component,
+            &heartbeat_msg,
+            MAV_TYPE_GENERIC,
+            MAV_AUTOPILOT_INVALID,
+            0,
+            0,
+            MAV_STATE_ACTIVE
+        );
+        sendMessage(heartbeat_msg);
+
+        mavlink_message_t pos_msg;
+        mavlink_msg_global_position_int_pack(
+            target_system,
+            target_component,
+            &pos_msg,
+            getTimeBootMs(),
+            static_cast<int32_t>(lat * 1e7),
+            static_cast<int32_t>(lon * 1e7),
+            static_cast<int32_t>(alt * 1000),
+            static_cast<int32_t>(alt * 1000),
+            0,
+            0,
+            0,
+            0
+        );
+        sendMessage(pos_msg);
+    }
+
     void sendRoiLocation(double lat, double lon, float alt,
                          uint8_t target_system, uint8_t target_component) {
         mavlink_message_t msg;
