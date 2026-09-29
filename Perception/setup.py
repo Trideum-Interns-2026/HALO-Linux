@@ -30,6 +30,7 @@ setup(
             "red_sphere_detector = perception.red_sphere_detector:main",
             "person_detector = perception.person_detector:main",
             "yolo_person_detector = perception.yolo_person_detector:main",
+            "debug_image_viewer = perception.debug_image_viewer:main",
         ],
     },
 )

@@ -5,13 +5,15 @@ Same publish contract as person_detector.py (HOG-based), so either can be
 picked per launch file and the tracker consumes both the same way: centroid
 + bbox height on ~/person/position (PointStamped: x=u, y=v,
 z=bbox_height_px), a distance estimate (meters) on ~/person/distance, and an
-annotated debug image on ~/person/debug_image — the latter only while
-something is subscribed to it, since encoding a 1080p frame isn't free.
+annotated debug image (960px wide) on ~/person/debug_image — the latter
+only while something is subscribed to it, since drawing and encoding it
+isn't free. View it with `ros2 run perception debug_image_viewer`.
 
 Runs on the NVIDIA GPU when PyTorch can see one, CPU otherwise.
 """
 
 import threading
+import time
 
 import cv2
 import rclpy
@@ -19,6 +21,7 @@ import torch
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32
@@ -57,6 +60,10 @@ class YoloPersonDetector(Node):
         # person tightly, so unlike HOG no margin correction is needed.
         self.declare_parameter("person_height_m", 1.9)
         self.declare_parameter("publish_debug_image", True)
+        # Debug images are shrunk to this width before publishing: a raw
+        # 1080p frame is ~6MB, which is most of what makes rqt_image_view
+        # lag. 0 publishes full resolution.
+        self.declare_parameter("debug_image_width", 960)
 
         image_topic = self.get_parameter("image_topic").value
         camera_info_topic = self.get_parameter("camera_info_topic").value
@@ -64,6 +71,7 @@ class YoloPersonDetector(Node):
         self.inference_size = int(self.get_parameter("inference_size").value)
         self.person_height_m = float(self.get_parameter("person_height_m").value)
         self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
+        self.debug_image_width = int(self.get_parameter("debug_image_width").value)
         self.device = self.get_parameter("device").value or (
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
@@ -72,11 +80,16 @@ class YoloPersonDetector(Node):
         self.focal_length_px = None  # populated once camera_info arrives
         self.model = YOLO(self.get_parameter("model_path").value)
 
-        # Only the newest frame matters for a live tracker: BEST_EFFORT +
-        # depth 1 drops stale frames at the DDS layer instead of queueing
-        # them, on top of the single-slot handoff below.
+        # Only the newest frame matters for a live tracker, so depth 1 — but
+        # RELIABLE, not BEST_EFFORT. A 1080p frame is ~6MB, which Fast DDS
+        # splits into ~100 fragments; best-effort loses the whole frame if
+        # any one fragment is dropped, and measured in the sim that cut a
+        # 15 Hz camera to ~2 Hz with multi-second gaps. Reliable repairs lost
+        # fragments, and KEEP_LAST 1 still means a slow reader only ever
+        # gets the newest frame, never a backlog. The same profile is used
+        # for the debug image publishers, for the same reasons.
         image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
@@ -87,7 +100,7 @@ class YoloPersonDetector(Node):
         self.position_pub = self.create_publisher(PointStamped, "~/person/position", 10)
         self.distance_pub = self.create_publisher(Float32, "~/person/distance", 10)
         self.debug_image_pub = (
-            self.create_publisher(Image, "~/person/debug_image", 10)
+            self.create_publisher(Image, "~/person/debug_image", image_qos)
             if self.publish_debug_image
             else None
         )
@@ -100,6 +113,14 @@ class YoloPersonDetector(Node):
         self._shutdown = False
         self._worker = threading.Thread(target=self._inference_loop, daemon=True)
         self._worker.start()
+
+        # Pipeline stats, logged every few seconds so a slow stage shows up
+        # in the node's output: frames received from the camera, frames
+        # replaced in the slot before the worker got to them, frames
+        # processed, and time spent in inference / debug-image publishing.
+        # Guarded by self._cond.
+        self._stats = self._empty_stats()
+        self.create_timer(5.0, self._log_stats)
 
         self.get_logger().info(
             f"Subscribed to '{image_topic}' for YOLO person detection on {self.device}"
@@ -118,6 +139,9 @@ class YoloPersonDetector(Node):
             return
 
         with self._cond:
+            self._stats["received"] += 1
+            if self._pending is not None:
+                self._stats["dropped"] += 1
             self._pending = (frame, msg.header)  # replaces any unprocessed frame
             self._cond.notify()
 
@@ -131,7 +155,31 @@ class YoloPersonDetector(Node):
                 frame, header = self._pending
                 self._pending = None
 
-            self._process(frame, header)
+            try:
+                self._process(frame, header)
+            except Exception:
+                if not self.context.ok():
+                    return  # Ctrl+C shut ROS down mid-frame; nothing to publish to
+                raise
+
+    @staticmethod
+    def _empty_stats():
+        return {"received": 0, "dropped": 0, "processed": 0, "infer_s": 0.0,
+                "infer_max_s": 0.0, "debug_s": 0.0, "since": time.monotonic()}
+
+    def _log_stats(self):
+        with self._cond:
+            s, self._stats = self._stats, self._empty_stats()
+        elapsed = time.monotonic() - s["since"]
+        n = max(s["processed"], 1)
+        self.get_logger().info(
+            f"camera in {s['received'] / elapsed:.1f} Hz, "
+            f"processed {s['processed'] / elapsed:.1f} Hz, "
+            f"dropped {s['dropped']} stale | "
+            f"inference avg {1000 * s['infer_s'] / n:.0f} ms "
+            f"(max {1000 * s['infer_max_s']:.0f}), "
+            f"debug image avg {1000 * s['debug_s'] / n:.0f} ms"
+        )
 
     def destroy_node(self):
         with self._cond:
@@ -141,7 +189,9 @@ class YoloPersonDetector(Node):
         super().destroy_node()
 
     def _process(self, frame, header):
+        t0 = time.monotonic()
         detection = self._detect_person(frame)
+        t_infer = time.monotonic() - t0
         distance_m = None
 
         if detection is not None:
@@ -166,6 +216,12 @@ class YoloPersonDetector(Node):
         ):
             self._publish_debug_image(frame, detection, distance_m, header)
 
+        with self._cond:
+            self._stats["processed"] += 1
+            self._stats["infer_s"] += t_infer
+            self._stats["infer_max_s"] = max(self._stats["infer_max_s"], t_infer)
+            self._stats["debug_s"] += time.monotonic() - t0 - t_infer
+
     def _detect_person(self, frame):
         results = self.model.predict(
             frame,
@@ -181,6 +237,12 @@ class YoloPersonDetector(Node):
         best = max(results.boxes, key=lambda b: float(b.conf[0]))
         x1, y1, x2, y2 = (float(v) for v in best.xyxy[0])
         return ((x1 + x2) / 2.0, (y1 + y2) / 2.0), (x1, y1, x2, y2), float(best.conf[0])
+
+    def _shrink_for_debug(self, image):
+        if self.debug_image_width <= 0 or image.shape[1] <= self.debug_image_width:
+            return image
+        scale = self.debug_image_width / image.shape[1]
+        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
     def _publish_debug_image(self, frame, detection, distance_m, header):
         debug = frame.copy()
@@ -204,7 +266,9 @@ class YoloPersonDetector(Node):
             cv2.circle(debug, (int(cx), int(cy)), 4, (0, 255, 0), -1)
 
         try:
-            debug_msg = self.bridge.cv2_to_imgmsg(debug, encoding="bgr8")
+            debug_msg = self.bridge.cv2_to_imgmsg(
+                self._shrink_for_debug(debug), encoding="bgr8"
+            )
         except CvBridgeError as exc:
             self.get_logger().warn(f"cv_bridge conversion failed for debug image: {exc}")
             return
@@ -217,11 +281,11 @@ def main(args=None):
     node = YoloPersonDetector()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl+C: rclpy's signal handler has already shut ROS down
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

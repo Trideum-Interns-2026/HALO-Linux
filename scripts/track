@@ -13,7 +13,7 @@ build_dir="${repo_dir}/build"
 cmake -S "${repo_dir}" -B "${build_dir}"
 cmake --build "${build_dir}" --target main
 # Follow whichever detector `perceive` started (same PERCEIVE_TARGET switch).
-case "${PERCEIVE_TARGET:-sphere}" in
+case "${PERCEIVE_TARGET:-yolo_person}" in
     person) detector=/person_detector/person ;;
     yolo_person) detector=/yolo_person_detector/person ;;
     *) detector="" ;;

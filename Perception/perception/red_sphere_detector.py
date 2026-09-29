@@ -39,6 +39,10 @@ class RedSphereDetector(Node):
         self.declare_parameter("camera_info_topic", "/camera/front/camera_info")
         self.declare_parameter("min_contour_area", 150.0)
         self.declare_parameter("publish_debug_image", True)
+        # Debug images are shrunk to this width before publishing: a raw
+        # 1080p frame is ~6MB, which is most of what makes rqt_image_view
+        # lag. 0 publishes full resolution.
+        self.declare_parameter("debug_image_width", 960)
         # Real-world diameter of the target sphere, in meters — matches
         # Perception/models/red_sphere.sdf (radius 0.2m). Used with the
         # camera's focal length to estimate distance from apparent size.
@@ -48,16 +52,22 @@ class RedSphereDetector(Node):
         camera_info_topic = self.get_parameter("camera_info_topic").value
         self.min_contour_area = float(self.get_parameter("min_contour_area").value)
         self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
+        self.debug_image_width = int(self.get_parameter("debug_image_width").value)
         self.sphere_diameter_m = float(self.get_parameter("sphere_diameter_m").value)
 
         self.bridge = CvBridge()
         self.focal_length_px = None  # populated once camera_info arrives
 
-        # Only the newest frame matters for a live tracker: BEST_EFFORT +
-        # depth 1 drops stale frames at the DDS layer instead of queueing
-        # them while the previous frame is still being processed.
+        # Only the newest frame matters for a live tracker, so depth 1 — but
+        # RELIABLE, not BEST_EFFORT. A 1080p frame is ~6MB, which Fast DDS
+        # splits into ~100 fragments; best-effort loses the whole frame if
+        # any one fragment is dropped, and measured in the sim that cut a
+        # 15 Hz camera to ~2 Hz with multi-second gaps. Reliable repairs lost
+        # fragments, and KEEP_LAST 1 still means a slow reader only ever
+        # gets the newest frame, never a backlog. The same profile is used
+        # for the debug image publishers, for the same reasons.
         image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
@@ -74,7 +84,7 @@ class RedSphereDetector(Node):
             Float32, "~/red_sphere/distance", 10
         )
         self.debug_image_pub = (
-            self.create_publisher(Image, "~/red_sphere/debug_image", 10)
+            self.create_publisher(Image, "~/red_sphere/debug_image", image_qos)
             if self.publish_debug_image
             else None
         )
@@ -82,7 +92,7 @@ class RedSphereDetector(Node):
         # fastest way to check if the color threshold is even seeing the
         # sphere's red before worrying about contour/bbox logic.
         self.mask_debug_pub = (
-            self.create_publisher(Image, "~/red_sphere/mask_debug", 10)
+            self.create_publisher(Image, "~/red_sphere/mask_debug", image_qos)
             if self.publish_debug_image
             else None
         )
@@ -155,6 +165,12 @@ class RedSphereDetector(Node):
         bbox = cv2.boundingRect(largest)  # (x, y, w, h)
         return ((cx, cy), radius, bbox), mask
 
+    def _shrink_for_debug(self, image):
+        if self.debug_image_width <= 0 or image.shape[1] <= self.debug_image_width:
+            return image
+        scale = self.debug_image_width / image.shape[1]
+        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
     def _publish_debug_image(self, frame, detection, distance_m, header):
         debug = frame.copy()
         if detection is not None:
@@ -176,7 +192,9 @@ class RedSphereDetector(Node):
             cv2.circle(debug, (int(cx), int(cy)), 3, (0, 255, 0), -1)
 
         try:
-            debug_msg = self.bridge.cv2_to_imgmsg(debug, encoding="bgr8")
+            debug_msg = self.bridge.cv2_to_imgmsg(
+                self._shrink_for_debug(debug), encoding="bgr8"
+            )
         except CvBridgeError as exc:
             self.get_logger().warn(f"cv_bridge conversion failed for debug image: {exc}")
             return
@@ -185,7 +203,9 @@ class RedSphereDetector(Node):
 
     def _publish_mask_debug(self, mask, header):
         try:
-            mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding="mono8")
+            mask_msg = self.bridge.cv2_to_imgmsg(
+                self._shrink_for_debug(mask), encoding="mono8"
+            )
         except CvBridgeError as exc:
             self.get_logger().warn(f"cv_bridge conversion failed for mask debug: {exc}")
             return

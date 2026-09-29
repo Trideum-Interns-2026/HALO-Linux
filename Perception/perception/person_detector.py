@@ -46,6 +46,10 @@ class PersonDetector(Node):
         # camera's focal length to estimate distance from apparent height.
         self.declare_parameter("person_height_m", 1.9)
         self.declare_parameter("publish_debug_image", True)
+        # Debug images are shrunk to this width before publishing: a raw
+        # 1080p frame is ~6MB, which is most of what makes rqt_image_view
+        # lag. 0 publishes full resolution.
+        self.declare_parameter("debug_image_width", 960)
 
         image_topic = self.get_parameter("image_topic").value
         camera_info_topic = self.get_parameter("camera_info_topic").value
@@ -53,17 +57,23 @@ class PersonDetector(Node):
         self.detection_width = int(self.get_parameter("detection_width").value)
         self.person_height_m = float(self.get_parameter("person_height_m").value)
         self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
+        self.debug_image_width = int(self.get_parameter("debug_image_width").value)
 
         self.bridge = CvBridge()
         self.focal_length_px = None  # populated once camera_info arrives
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
-        # Only the newest frame matters for a live tracker: BEST_EFFORT +
-        # depth 1 drops stale frames at the DDS layer instead of queueing
-        # them while the previous frame is still being processed.
+        # Only the newest frame matters for a live tracker, so depth 1 — but
+        # RELIABLE, not BEST_EFFORT. A 1080p frame is ~6MB, which Fast DDS
+        # splits into ~100 fragments; best-effort loses the whole frame if
+        # any one fragment is dropped, and measured in the sim that cut a
+        # 15 Hz camera to ~2 Hz with multi-second gaps. Reliable repairs lost
+        # fragments, and KEEP_LAST 1 still means a slow reader only ever
+        # gets the newest frame, never a backlog. The same profile is used
+        # for the debug image publishers, for the same reasons.
         image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
@@ -74,7 +84,7 @@ class PersonDetector(Node):
         self.position_pub = self.create_publisher(PointStamped, "~/person/position", 10)
         self.distance_pub = self.create_publisher(Float32, "~/person/distance", 10)
         self.debug_image_pub = (
-            self.create_publisher(Image, "~/person/debug_image", 10)
+            self.create_publisher(Image, "~/person/debug_image", image_qos)
             if self.publish_debug_image
             else None
         )
@@ -140,6 +150,12 @@ class PersonDetector(Node):
         x, y, w, h = (float(v) / scale for v in boxes[best])
         return (x + w / 2.0, y + h / 2.0), (x, y, w, h), score
 
+    def _shrink_for_debug(self, image):
+        if self.debug_image_width <= 0 or image.shape[1] <= self.debug_image_width:
+            return image
+        scale = self.debug_image_width / image.shape[1]
+        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
     def _publish_debug_image(self, frame, detection, distance_m, header):
         debug = frame.copy()
         if detection is not None:
@@ -162,7 +178,9 @@ class PersonDetector(Node):
             cv2.circle(debug, (int(cx), int(cy)), 4, (0, 255, 0), -1)
 
         try:
-            debug_msg = self.bridge.cv2_to_imgmsg(debug, encoding="bgr8")
+            debug_msg = self.bridge.cv2_to_imgmsg(
+                self._shrink_for_debug(debug), encoding="bgr8"
+            )
         except CvBridgeError as exc:
             self.get_logger().warn(f"cv_bridge conversion failed for debug image: {exc}")
             return
