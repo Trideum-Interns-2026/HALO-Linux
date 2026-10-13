@@ -17,6 +17,7 @@ import rclpy
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32
 
@@ -45,6 +46,10 @@ class PersonDetector(Node):
         # camera's focal length to estimate distance from apparent height.
         self.declare_parameter("person_height_m", 1.9)
         self.declare_parameter("publish_debug_image", True)
+        # Debug images are shrunk to this width before publishing: a raw
+        # 1080p frame is ~6MB, which is most of what makes rqt_image_view
+        # lag. 0 publishes full resolution.
+        self.declare_parameter("debug_image_width", 960)
 
         image_topic = self.get_parameter("image_topic").value
         camera_info_topic = self.get_parameter("camera_info_topic").value
@@ -52,23 +57,34 @@ class PersonDetector(Node):
         self.detection_width = int(self.get_parameter("detection_width").value)
         self.person_height_m = float(self.get_parameter("person_height_m").value)
         self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
+        self.debug_image_width = int(self.get_parameter("debug_image_width").value)
 
         self.bridge = CvBridge()
         self.focal_length_px = None  # populated once camera_info arrives
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
-        # Queue depth 1: HOG is slower than the camera's 30 FPS, so always
-        # work on the newest frame and drop the backlog instead of falling
-        # further and further behind.
-        self.image_sub = self.create_subscription(Image, image_topic, self.on_image, 1)
+        # Only the newest frame matters for a live tracker, so depth 1 — but
+        # RELIABLE, not BEST_EFFORT. A 1080p frame is ~6MB, which Fast DDS
+        # splits into ~100 fragments; best-effort loses the whole frame if
+        # any one fragment is dropped, and measured in the sim that cut a
+        # 15 Hz camera to ~2 Hz with multi-second gaps. Reliable repairs lost
+        # fragments, and KEEP_LAST 1 still means a slow reader only ever
+        # gets the newest frame, never a backlog. The same profile is used
+        # for the debug image publishers, for the same reasons.
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.image_sub = self.create_subscription(Image, image_topic, self.on_image, image_qos)
         self.camera_info_sub = self.create_subscription(
             CameraInfo, camera_info_topic, self.on_camera_info, 10
         )
         self.position_pub = self.create_publisher(PointStamped, "~/person/position", 10)
         self.distance_pub = self.create_publisher(Float32, "~/person/distance", 10)
         self.debug_image_pub = (
-            self.create_publisher(Image, "~/person/debug_image", 10)
+            self.create_publisher(Image, "~/person/debug_image", image_qos)
             if self.publish_debug_image
             else None
         )
@@ -106,7 +122,12 @@ class PersonDetector(Node):
                 distance_m = self.person_height_m * self.focal_length_px / person_px
                 self.distance_pub.publish(Float32(data=float(distance_m)))
 
-        if self.debug_image_pub is not None:
+        # Encoding a 1080p debug frame isn't free — skip it unless something
+        # (e.g. rqt_image_view) is actually watching.
+        if (
+            self.debug_image_pub is not None
+            and self.debug_image_pub.get_subscription_count() > 0
+        ):
             self._publish_debug_image(frame, detection, distance_m, msg.header)
 
     def _detect_person(self, frame):
@@ -128,6 +149,12 @@ class PersonDetector(Node):
         # tracker's camera_info intrinsics refer to.
         x, y, w, h = (float(v) / scale for v in boxes[best])
         return (x + w / 2.0, y + h / 2.0), (x, y, w, h), score
+
+    def _shrink_for_debug(self, image):
+        if self.debug_image_width <= 0 or image.shape[1] <= self.debug_image_width:
+            return image
+        scale = self.debug_image_width / image.shape[1]
+        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
     def _publish_debug_image(self, frame, detection, distance_m, header):
         debug = frame.copy()
@@ -151,7 +178,9 @@ class PersonDetector(Node):
             cv2.circle(debug, (int(cx), int(cy)), 4, (0, 255, 0), -1)
 
         try:
-            debug_msg = self.bridge.cv2_to_imgmsg(debug, encoding="bgr8")
+            debug_msg = self.bridge.cv2_to_imgmsg(
+                self._shrink_for_debug(debug), encoding="bgr8"
+            )
         except CvBridgeError as exc:
             self.get_logger().warn(f"cv_bridge conversion failed for debug image: {exc}")
             return
