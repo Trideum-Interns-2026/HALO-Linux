@@ -60,6 +60,49 @@ what the demo runs; `perceive` and `track` use it by default.
   frame rather than building a backlog.
 - `Perception/models/standing_person.sdf` is a static standing human (mesh
   from Gazebo Fuel, downloaded to `~/.gz/fuel` on first spawn — needs
+  internet once). `standing_person_marker.sdf` is the same person with a
+  0.4m red sphere on the chest, for the red sphere detector. Spawn with
+  `spawn_person [x] [y] [yaw]` (default 5 0 0, facing the drone), or
+  `MARKER=1 spawn_person` for the marked one. Spawning it removes
+  `red_sphere`, so the detectors only ever see one target.
+
+To switch the automatic `fly` workflow from the sphere to a person, set
+`PERCEIVE_TARGET` before running it:
+
+- `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
+- `PERCEIVE_TARGET=marked_person` — person with red marker,
+  `red_sphere_detector` (`track` needs no variable for this one)
+
+## Running it
+
+1. Open QGroundControl.
+2. Run `fly` in the Dev Container. It starts PX4/Gazebo, spawns the selected
+   test target, starts the camera bridge and detector without debug-image
+   publishing, and builds/runs the target-centering controller.
+3. The controller waits for PX4 health checks, arms, and takes off using PX4's
+   configured `MIS_TAKEOFF_ALT` (2.5 meters by default in this SITL setup).
+   It Kalman-filters the target's camera bearing and continuously yaws to keep
+   the target centered. When detections go stale, it holds its current heading;
+   press Ctrl+C to land and stop the simulator and ROS processes.
+
+The default target is a red sphere. Select a person or a marked person by
+setting `PERCEIVE_TARGET=person` or `PERCEIVE_TARGET=marked_person` before
+running `fly`. The existing `perceive` command remains available when you want
+the standalone perception demo and debug-image viewer.
+
+Automatic takeoff and tracking are intended for PX4/Gazebo SITL only; do not
+run them against a real vehicle. QGroundControl and the vehicle must be
+connected through MAVLink, and the controller uses MAVSDK UDP `14540`.
+
+### Docker resources
+
+The Compose files do not set CPU or storage limits. `fly` runs inside the
+already-created Dev Container; it cannot allocate more CPU or disk to Docker.
+If Docker reports zero CPUs or the container exits from resource pressure,
+check Docker Desktop's WSL2 resource allocation and available host/WSL disk
+space before rerunning. Read-only checks include `docker info`,
+`docker system df`, `free -h`, and `df -h`; avoid pruning Docker data unless
+you have confirmed it is safe to remove.
   internet once). `perceive` spawns it for you; to move it, run
   `spawn_person [x] [y] [yaw]` (default 5 0 0, facing the drone).
 - `perception/debug_image_viewer.py` is the live viewer `perceive` opens on
