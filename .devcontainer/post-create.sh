@@ -28,8 +28,8 @@ git config --global --get-all safe.directory | grep -qx /workspace || \
 # Dockerfile does too, this covers containers built before that change).
 grep -q "export PX4_SIM_MODEL=" /etc/bash.bashrc || \
     echo "export PX4_SIM_MODEL=gz_x500_depth" >> /etc/bash.bashrc
-grep -q "alias fly=" /etc/bash.bashrc || \
-    echo "alias fly='PX4_SIM_MODEL=\${PX4_SIM_MODEL:-gz_x500_depth} /usr/local/bin/ros2-entrypoint.sh px4-gazebo'" >> /etc/bash.bashrc
+sed -i '/^alias fly=/d' /etc/bash.bashrc
+echo "alias fly='/workspace/scripts/fly'" >> /etc/bash.bashrc
 grep -q "source /opt/ros/jazzy/setup.bash" /etc/bash.bashrc || \
     echo "source /opt/ros/jazzy/setup.bash" >> /etc/bash.bashrc
 grep -q "ros2_ws/install/setup.bash" /etc/bash.bashrc || \

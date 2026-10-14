@@ -70,8 +70,8 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
   `MARKER=1 spawn_person` for the marked one. Spawning it removes
   `red_sphere`, so the detectors only ever see one target.
 
-To switch `perceive` and `track` from the sphere to a person, set
-`PERCEIVE_TARGET` in **both** terminals:
+To switch the automatic `fly` workflow from the sphere to a person, set
+`PERCEIVE_TARGET` before running it:
 
 - `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
 - `PERCEIVE_TARGET=marked_person` — person with red marker,
@@ -79,18 +79,34 @@ To switch `perceive` and `track` from the sphere to a person, set
 
 ## Running it
 
-1. Open QGroundControl
-2. `fly` — launches Gazebo.
-3. In a new terminal, enter the command `perceive` — this runs perception code.
-4. In a new terminal, enter the command `track` — runs the Kalman filter and repeatedly sends the filtered target
-  location to QGroundControl as `MAV_CMD_DO_SET_ROI_LOCATION`, keeping the
-  QGroundControl ROI command updated while the target is visible. The same
-  terminal displays the drone and filtered target coordinates once per second.
+1. Open QGroundControl.
+2. Run `fly` in the Dev Container. It starts PX4/Gazebo, spawns the selected
+   test target, starts the camera bridge and detector without debug-image
+   publishing, and builds/runs the target-centering controller.
+3. The controller waits for PX4 health checks, arms, and takes off using PX4's
+   configured `MIS_TAKEOFF_ALT` (2.5 meters by default in this SITL setup).
+   It Kalman-filters the target's camera bearing and continuously yaws to keep
+   the target centered. When detections go stale, it holds its current heading;
+   press Ctrl+C to land and stop the simulator and ROS processes.
 
-Run `track` in a separate terminal after perception is running. The vehicle
-must be connected on MAVSDK UDP `14540`. QGroundControl does not persistently
-draw arbitrary map pins for ROI commands, so use the `track` terminal readout
-for the live target latitude, longitude, altitude, and distance.
+The default target is a red sphere. Select a person or a marked person by
+setting `PERCEIVE_TARGET=person` or `PERCEIVE_TARGET=marked_person` before
+running `fly`. The existing `perceive` command remains available when you want
+the standalone perception demo and debug-image viewer.
+
+Automatic takeoff and tracking are intended for PX4/Gazebo SITL only; do not
+run them against a real vehicle. QGroundControl and the vehicle must be
+connected through MAVLink, and the controller uses MAVSDK UDP `14540`.
+
+### Docker resources
+
+The Compose files do not set CPU or storage limits. `fly` runs inside the
+already-created Dev Container; it cannot allocate more CPU or disk to Docker.
+If Docker reports zero CPUs or the container exits from resource pressure,
+check Docker Desktop's WSL2 resource allocation and available host/WSL disk
+space before rerunning. Read-only checks include `docker info`,
+`docker system df`, `free -h`, and `df -h`; avoid pruning Docker data unless
+you have confirmed it is safe to remove.
 
 ## Running on the NVIDIA DGX Spark (ARM64)
 

@@ -14,10 +14,16 @@ def generate_launch_description():
         default_value="/camera/front/image_raw",
         description="Camera image topic to subscribe to",
     )
+    publish_debug_image_arg = DeclareLaunchArgument(
+        "publish_debug_image",
+        default_value="true",
+        description="Publish annotated and mask debug images",
+    )
 
     return LaunchDescription(
         [
             image_topic_arg,
+            publish_debug_image_arg,
             Node(
                 package="perception",
                 executable="red_sphere_detector",
@@ -26,7 +32,10 @@ def generate_launch_description():
                 parameters=[
                     {"image_topic": LaunchConfiguration("image_topic")},
                     {"min_contour_area": 150.0},
-                    {"publish_debug_image": True},
+                    {
+                        "publish_debug_image":
+                            LaunchConfiguration("publish_debug_image")
+                    },
                 ],
             ),
         ]

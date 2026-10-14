@@ -12,10 +12,16 @@ def generate_launch_description():
         default_value="/camera/front/image_raw",
         description="Camera image topic to subscribe to",
     )
+    publish_debug_image_arg = DeclareLaunchArgument(
+        "publish_debug_image",
+        default_value="true",
+        description="Publish annotated debug images",
+    )
 
     return LaunchDescription(
         [
             image_topic_arg,
+            publish_debug_image_arg,
             Node(
                 package="perception",
                 executable="person_detector",
@@ -25,7 +31,10 @@ def generate_launch_description():
                     {"image_topic": LaunchConfiguration("image_topic")},
                     {"min_confidence": 0.5},
                     {"detection_width": 960},
-                    {"publish_debug_image": True},
+                    {
+                        "publish_debug_image":
+                            LaunchConfiguration("publish_debug_image")
+                    },
                 ],
             ),
         ]
