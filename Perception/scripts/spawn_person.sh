@@ -17,9 +17,10 @@ Y="${2:-0}"
 YAW="${3:-0}"
 
 source /opt/ros/jazzy/setup.bash
+source "$(dirname "${BASH_SOURCE[0]}")/gz_world.sh"
 
 for NAME in red_sphere standing_person; do
-    gz service -s /world/default/remove \
+    gz service -s /world/$WORLD/remove \
         --reqtype gz.msgs.Entity --reptype gz.msgs.Boolean --timeout 2000 \
         --req "name: \"$NAME\", type: MODEL" \
         > /dev/null 2>&1 || true
@@ -37,6 +38,6 @@ QW=$(python3 -c "import math; print(math.cos($YAW / 2))")
 
 # Longer timeout than spawn_sphere.sh: the first spawn downloads the mesh
 # from Gazebo Fuel.
-gz service -s /world/default/create \
+gz service -s /world/$WORLD/create \
     --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 30000 \
     --req "sdf_filename: \"$MODEL_FILE\", name: \"standing_person\", pose: {position: {x: $X, y: $Y, z: 0}, orientation: {z: $QZ, w: $QW}}"
