@@ -1,3 +1,6 @@
+#ifndef TRACK_AND_CENTER_HPP
+#define TRACK_AND_CENTER_HPP
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -5,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -30,7 +34,7 @@ public:
         declare_parameter("camera_info_topic", "/camera/front/camera_info");
         declare_parameter("vehicle_position_topic", "/vehicle/position");
         declare_parameter("vehicle_heading_topic", "/vehicle/heading_deg");
-        declare_parameter("mavsdk_connection_url", "udp://:14540");
+        declare_parameter("mavsdk_connection_url", "udpin://0.0.0.0:14540");
         declare_parameter("centering_gain", 2.0);
         declare_parameter("max_yaw_rate_deg_s", 30.0);
         declare_parameter("center_deadband_deg", 1.0);
@@ -96,6 +100,7 @@ private:
     void launchAndStartTracking(const std::string& connection_url) {
         mavsdk_ = std::make_unique<mavsdk::Mavsdk>(
             mavsdk::Mavsdk::Configuration{mavsdk::ComponentType::GroundStation});
+        mavsdk_->set_timeout_s(3.0);
         const auto connection_result = mavsdk_->add_any_connection(connection_url);
         if (connection_result != mavsdk::ConnectionResult::Success) {
             throw std::runtime_error(
@@ -148,16 +153,27 @@ private:
 
         auto result = action_->arm();
         if (result != mavsdk::Action::Result::Success) {
-            const auto arm_deadline = std::chrono::steady_clock::now() + 2s;
+            const auto arm_deadline = std::chrono::steady_clock::now() + 5s;
             while (rclcpp::ok() && !telemetry_->armed() &&
                    std::chrono::steady_clock::now() < arm_deadline) {
                 std::this_thread::sleep_for(100ms);
             }
             if (!telemetry_->armed()) {
-                throw std::runtime_error(
-                    "Arming failed with code " +
-                    std::to_string(static_cast<int>(result)) +
-                    "; PX4 did not report the vehicle armed");
+                const auto health = telemetry_->health();
+                std::ostringstream error;
+                error << "Arming failed: " << result
+                      << " (code " << static_cast<int>(result) << ")"
+                      << "; PX4 armed=" << std::boolalpha << telemetry_->armed()
+                      << ", armable=" << health.is_armable
+                      << ", gyro_calibrated=" << health.is_gyrometer_calibration_ok
+                      << ", accelerometer_calibrated="
+                      << health.is_accelerometer_calibration_ok
+                      << ", magnetometer_calibrated="
+                      << health.is_magnetometer_calibration_ok
+                      << ", local_position_ok=" << health.is_local_position_ok
+                      << ", global_position_ok=" << health.is_global_position_ok
+                      << ", home_position_ok=" << health.is_home_position_ok;
+                throw std::runtime_error(error.str());
             }
             RCLCPP_WARN(
                 get_logger(),
@@ -313,18 +329,4 @@ private:
     bool bearing_filter_initialized_{false};
 };
 
-int main(int argc, char** argv) {
-    rclcpp::init(argc, argv);
-    try {
-        auto node = std::make_shared<TrackAndCenterNode>();
-        rclcpp::spin(node);
-        node->land();
-        node.reset();
-        rclcpp::shutdown();
-    } catch (const std::exception& error) {
-        RCLCPP_ERROR(rclcpp::get_logger("track_and_center"), "%s", error.what());
-        rclcpp::shutdown();
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
-}
+#endif

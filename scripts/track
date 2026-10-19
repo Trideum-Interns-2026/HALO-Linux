@@ -29,31 +29,11 @@ case "$target" in
 esac
 
 cmake -S "$repo_dir" -B "$build_dir"
-cmake --build "$build_dir" --target main track_and_center
-
-kalman_pid=
-controller_pid=
-cleanup() {
-    local status=$?
-    trap - EXIT INT TERM
-
-    if [[ -n "$controller_pid" ]]; then
-        kill -INT -- "-$controller_pid" 2>/dev/null || true
-        wait "$controller_pid" 2>/dev/null || true
-    fi
-    if [[ -n "$kalman_pid" ]]; then
-        kill -INT -- "-$kalman_pid" 2>/dev/null || true
-        wait "$kalman_pid" 2>/dev/null || true
-    fi
-    exit "$status"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+cmake --build "$build_dir" --target main
 
 echo "Starting Kalman target tracking and camera-based centering for ${target}."
 echo "Press Ctrl+C here to stop tracking and land; fly and perceive remain running."
-setsid bash -c 'trap - INT; exec "$@"' _ "$build_dir/main" --ros-args \
+exec "$build_dir/main" --ros-args \
     -p position_topic:="$position_topic" \
     -p distance_topic:="$distance_topic" \
     "$@" &
@@ -65,7 +45,6 @@ setsid bash -c 'trap - INT; exec "$@"' _ "$build_dir/track_and_center" --ros-arg
 controller_pid=$!
 
 wait -n "$kalman_pid" "$controller_pid"
-=======
 cmake -S "${repo_dir}" -B "${build_dir}"
 cmake --build "${build_dir}" --target track_and_center
 # Follow whichever detector `perceive` started (same PERCEIVE_TARGET switch).
