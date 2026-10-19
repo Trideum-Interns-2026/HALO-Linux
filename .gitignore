@@ -26,3 +26,13 @@ __pycache__/
 # OS clutter
 .DS_Store
 Thumbs.db
+
+# Per-developer Spark settings (HALO_DEV, Selkies password) — never shared
+.env
+
+# TensorRT engines are GPU/driver/TensorRT-version specific — build them on
+# the Spark with infra/triton/build_engine.sh, never commit one
+infra/triton/model_repository/*/[0-9]*/
+*.onnx
+*.plan
+*.engine

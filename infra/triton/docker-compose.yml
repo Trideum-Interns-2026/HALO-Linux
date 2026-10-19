@@ -1,0 +1,60 @@
+# Shared YOLO inference for every developer's container on the Spark.
+#
+# ONE Triton Inference Server, ONE TensorRT engine in GPU memory. The five
+# per-developer sim containers send frames here instead of each loading
+# their own PyTorch model, and Triton's dynamic batcher merges whichever of
+# them have a frame ready into a single batched GPU pass. This file is run
+# once by whoever administers the Spark, not per developer:
+#
+#   cd infra/triton
+#   ./build_engine.sh                # exports yolov8n → model_repository/yolo_person/1/model.plan
+#   docker compose up -d
+#   docker compose logs -f           # wait for "yolo_person | 1 | READY"
+#
+# Reachable from the dev containers as `triton:8001` (gRPC) over the
+# internal `halo-inference` bridge. No ports are published on the host —
+# this hop never leaves the Spark, so Brev/WAN networking is not involved.
+
+name: halo-triton
+
+services:
+  triton:
+    # Release tag must have an arm64 (SBSA) manifest and a minimum driver
+    # ≤ the Spark's — scripts/spark/verify.sh checks both. Keep in sync with
+    # TRITON_TAG in the dev-container build (the tritonclient wheel is
+    # taken from the same release's SDK image).
+    image: nvcr.io/nvidia/tritonserver:${TRITON_TAG:-25.09}-py3
+    container_name: triton
+    hostname: triton
+    restart: unless-stopped
+    command:
+      - tritonserver
+      - --model-repository=/models
+      # Fail loudly at start if the engine is missing/incompatible instead
+      # of serving an empty repository.
+      - --model-control-mode=none
+      - --strict-model-config=true
+      - --log-verbose=0
+    volumes:
+      - ./model_repository:/models:ro
+    shm_size: 1gb
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    devices:
+      - nvidia.com/gpu=all
+    networks:
+      - halo-inference
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v2/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+networks:
+  halo-inference:
+    name: halo-inference
+    # Shared with every developer's compose project (docker-compose.spark.yml
+    # declares it `external`). `docker compose down` here leaves it in place
+    # while dev containers are attached.
