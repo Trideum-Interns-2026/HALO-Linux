@@ -85,11 +85,13 @@ To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
 3. In another terminal, run `perceive`. It spawns the selected test target,
    starts the Gazebo camera bridge and detector, and opens the debug-image
    viewer. Leave it running while tracking.
-4. In a third terminal, run `track`. It builds and runs both C++ ROS nodes:
-   `main` runs the geographic target Kalman filter and publishes MAVLink
-   position/ROI updates, while `track_and_center` uses the camera bearing to
-   yaw the drone toward the detected target. The centering node waits for PX4
-   health checks, arms, and takes off using PX4's configured
+4. In a third terminal, run `track`. It builds and runs `main`, which starts
+   the geographic Kalman tracker from
+   `Include/Tracking/target_kalman_filter.hpp` and the camera-based centering
+   node from `Include/Tracking/track_and_center.hpp` together. The Kalman
+   tracker publishes MAVLink position/ROI updates; the centering node uses
+   the camera bearing to yaw the drone toward the detected target. It waits
+   for PX4 health checks, arms, and takes off using PX4's configured
    `MIS_TAKEOFF_ALT` (2.5 meters by default in this SITL setup). Press Ctrl+C
    in the `track` terminal to stop tracking and land; `fly` and `perceive`
    remain running until stopped in their own terminals.
