@@ -103,8 +103,14 @@ Open a terminal in VS Code (it's already inside the dev container). Run:
 ```bash
 fly
 ```
-This is a shortcut for `cd /PX4-Autopilot && make px4_sitl gazebo-classic_typhoon_h480`.
-Leave this terminal running.
+This starts PX4 SITL and Gazebo only. Leave this terminal running.
+
+In a second terminal, run `perceive` to spawn the selected test target, start
+the camera bridge and detector, and open the debug-image viewer. In a third
+terminal, run `track`; it builds and runs the Kalman/geographic tracker and
+the camera-based target-centering controller. Press Ctrl+C in the `track`
+terminal to stop tracking and land. Stop `perceive` and `fly` in their own
+terminals when finished.
 
 ## 8. Build and run your own code
 

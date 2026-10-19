@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -15,6 +16,8 @@
 #include <mavsdk/plugins/telemetry/telemetry.h>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <std_msgs/msg/float64.hpp>
 
 using namespace std::chrono_literals;
 
@@ -25,6 +28,8 @@ public:
           last_detection_time_(std::chrono::steady_clock::time_point::min()) {
         declare_parameter("position_topic", "/red_sphere_detector/red_sphere/position");
         declare_parameter("camera_info_topic", "/camera/front/camera_info");
+        declare_parameter("vehicle_position_topic", "/vehicle/position");
+        declare_parameter("vehicle_heading_topic", "/vehicle/heading_deg");
         declare_parameter("mavsdk_connection_url", "udp://:14540");
         declare_parameter("centering_gain", 2.0);
         declare_parameter("max_yaw_rate_deg_s", 30.0);
@@ -33,6 +38,10 @@ public:
 
         const auto position_topic = get_parameter("position_topic").as_string();
         const auto camera_info_topic = get_parameter("camera_info_topic").as_string();
+        vehicle_position_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>(
+            get_parameter("vehicle_position_topic").as_string(), 10);
+        vehicle_heading_pub_ = create_publisher<std_msgs::msg::Float64>(
+            get_parameter("vehicle_heading_topic").as_string(), 10);
         position_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
             position_topic, 10,
             [this](geometry_msgs::msg::PointStamped::SharedPtr msg) {
@@ -114,6 +123,19 @@ private:
         offboard_ = std::make_unique<mavsdk::Offboard>(system);
         telemetry_ = std::make_unique<mavsdk::Telemetry>(system);
 
+        telemetry_->subscribe_position([this](mavsdk::Telemetry::Position position) {
+            std::lock_guard<std::mutex> lock(vehicle_telemetry_mutex_);
+            vehicle_latitude_deg_ = position.latitude_deg;
+            vehicle_longitude_deg_ = position.longitude_deg;
+            vehicle_altitude_m_ = position.absolute_altitude_m;
+            have_vehicle_position_ = true;
+        });
+        telemetry_->subscribe_heading([this](mavsdk::Telemetry::Heading heading) {
+            std::lock_guard<std::mutex> lock(vehicle_telemetry_mutex_);
+            vehicle_heading_deg_ = heading.heading_deg;
+            have_vehicle_heading_ = true;
+        });
+
         while (rclcpp::ok() && !telemetry_->health_all_ok()) {
             RCLCPP_INFO_THROTTLE(
                 get_logger(), *get_clock(), 2000,
@@ -173,6 +195,36 @@ private:
     }
 
     void centerTarget() {
+        double vehicle_latitude_deg;
+        double vehicle_longitude_deg;
+        double vehicle_altitude_m;
+        double vehicle_heading_deg;
+        bool have_vehicle_position;
+        bool have_vehicle_heading;
+        {
+            std::lock_guard<std::mutex> lock(vehicle_telemetry_mutex_);
+            vehicle_latitude_deg = vehicle_latitude_deg_;
+            vehicle_longitude_deg = vehicle_longitude_deg_;
+            vehicle_altitude_m = vehicle_altitude_m_;
+            vehicle_heading_deg = vehicle_heading_deg_;
+            have_vehicle_position = have_vehicle_position_;
+            have_vehicle_heading = have_vehicle_heading_;
+        }
+
+        if (have_vehicle_position) {
+            sensor_msgs::msg::NavSatFix position;
+            position.header.stamp = now();
+            position.latitude = vehicle_latitude_deg;
+            position.longitude = vehicle_longitude_deg;
+            position.altitude = vehicle_altitude_m;
+            vehicle_position_pub_->publish(position);
+        }
+        if (have_vehicle_heading) {
+            std_msgs::msg::Float64 heading;
+            heading.data = vehicle_heading_deg;
+            vehicle_heading_pub_->publish(heading);
+        }
+
         float yaw_rate_deg_s = 0.0f;
         const auto timeout = std::chrono::milliseconds(
             get_parameter("target_timeout_ms").as_int());
@@ -239,16 +291,25 @@ private:
     std::unique_ptr<mavsdk::Telemetry> telemetry_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr position_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
+    rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr vehicle_position_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr vehicle_heading_pub_;
     rclcpp::TimerBase::SharedPtr centering_timer_;
+    std::mutex vehicle_telemetry_mutex_;
     std::chrono::steady_clock::time_point last_detection_time_;
     std::chrono::steady_clock::time_point last_filter_update_time_{};
     double target_pixel_x_{0.0};
     double focal_length_x_{0.0};
     double image_center_x_{0.0};
+    double vehicle_latitude_deg_{0.0};
+    double vehicle_longitude_deg_{0.0};
+    double vehicle_altitude_m_{0.0};
+    double vehicle_heading_deg_{0.0};
     double filtered_bearing_deg_{0.0};
     double bearing_variance_{0.0};
     bool have_target_{false};
     bool have_camera_info_{false};
+    bool have_vehicle_position_{false};
+    bool have_vehicle_heading_{false};
     bool bearing_filter_initialized_{false};
 };
 

@@ -70,33 +70,39 @@ from the drone's camera feed using OpenCV, and estimates distance to it.
   `MARKER=1 spawn_person` for the marked one. Spawning it removes
   `red_sphere`, so the detectors only ever see one target.
 
-To switch the automatic `fly` workflow from the sphere to a person, set
-`PERCEIVE_TARGET` before running it:
+To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
+`track`:
 
 - `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
 - `PERCEIVE_TARGET=marked_person` — person with red marker,
-  `red_sphere_detector` (`track` needs no variable for this one)
+  `red_sphere_detector`
 
 ## Running it
 
 1. Open QGroundControl.
-2. Run `fly` in the Dev Container. It starts PX4/Gazebo, spawns the selected
-   test target, starts the camera bridge and detector without debug-image
-   publishing, and builds/runs the target-centering controller.
-3. The controller waits for PX4 health checks, arms, and takes off using PX4's
-   configured `MIS_TAKEOFF_ALT` (2.5 meters by default in this SITL setup).
-   It Kalman-filters the target's camera bearing and continuously yaws to keep
-   the target centered. When detections go stale, it holds its current heading;
-   press Ctrl+C to land and stop the simulator and ROS processes.
+2. In a terminal in the Dev Container, run `fly`. It starts PX4 SITL and
+   Gazebo only; leave it running.
+3. In another terminal, run `perceive`. It spawns the selected test target,
+   starts the Gazebo camera bridge and detector, and opens the debug-image
+   viewer. Leave it running while tracking.
+4. In a third terminal, run `track`. It builds and runs both C++ ROS nodes:
+   `main` runs the geographic target Kalman filter and publishes MAVLink
+   position/ROI updates, while `track_and_center` uses the camera bearing to
+   yaw the drone toward the detected target. The centering node waits for PX4
+   health checks, arms, and takes off using PX4's configured
+   `MIS_TAKEOFF_ALT` (2.5 meters by default in this SITL setup). Press Ctrl+C
+   in the `track` terminal to stop tracking and land; `fly` and `perceive`
+   remain running until stopped in their own terminals.
 
-The default target is a red sphere. Select a person or a marked person by
-setting `PERCEIVE_TARGET=person` or `PERCEIVE_TARGET=marked_person` before
-running `fly`. The existing `perceive` command remains available when you want
-the standalone perception demo and debug-image viewer.
+The default target is a red sphere. To track an unmarked person or a marked
+person, set the same target selection in the `perceive` and `track` terminals.
+For example, run `PERCEIVE_TARGET=person perceive` and
+`PERCEIVE_TARGET=person track`. Use `PERCEIVE_TARGET=marked_person` for the
+person with the red chest marker.
 
 Automatic takeoff and tracking are intended for PX4/Gazebo SITL only; do not
 run them against a real vehicle. QGroundControl and the vehicle must be
-connected through MAVLink, and the controller uses MAVSDK UDP `14540`.
+connected through MAVLink, and the tracking nodes use MAVSDK UDP `14540`.
 
 ### Docker resources
 
