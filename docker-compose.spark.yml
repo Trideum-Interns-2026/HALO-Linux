@@ -28,3 +28,6 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     devices:
       - nvidia.com/gpu=all
+  build:
+    args:
+      YOLO_MODEL: yolov8x.pt

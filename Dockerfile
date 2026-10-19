@@ -70,13 +70,15 @@ RUN case "$TARGETARCH" in \
 #   apt python3-opencv every other node uses. Removed so everything shares
 #   the one apt cv2.
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG YOLO_MODEL=yolov8n.pt
 RUN pip3 install --no-cache-dir --break-system-packages \
         --index-url "$TORCH_INDEX_URL" torch torchvision \
     && pip3 install --no-cache-dir --break-system-packages "numpy<2" ultralytics \
     && (pip3 uninstall -y --break-system-packages opencv-python opencv-python-headless || true) \
     && mkdir -p /opt/yolo \
     && cd /opt/yolo \
-    && python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+    && python3 -c "from ultralytics import YOLO; YOLO('${YOLO_MODEL}')"
+ENV YOLO_MODEL_PATH=/opt/yolo/${YOLO_MODEL}
 
 # The OakD-Lite color camera (IMX214) renders 1920x1080 at 30 Hz, which is
 # ~180 MB/s through the ROS bridge — more than the detectors can use, and a

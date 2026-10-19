@@ -73,6 +73,8 @@ To switch the automatic `fly` workflow from the sphere to a person, set
 - `PERCEIVE_TARGET=marked_person` — person with red marker,
   `red_sphere_detector` (`track` needs no variable for this one)
 
+To switch map of the automatic fly workflow run PX4_GZ_WORLD = [Map] fly
+EX: PX4_GZ_WORLD=baylands fly 
 ## Running it
 
 1. Open QGroundControl.
