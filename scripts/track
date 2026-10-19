@@ -1,15 +1,71 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -Ee -o pipefail
 
 source /opt/ros/jazzy/setup.bash
 if [[ -f /opt/ros2_ws/install/setup.bash ]]; then
     source /opt/ros2_ws/install/setup.bash
 fi
+set -u
 
 script_path="$(readlink -f "${BASH_SOURCE[0]}")"
-repo_dir="$(cd "$(dirname "${script_path}")/.." && pwd)"
+repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 build_dir="${repo_dir}/build"
 
+fly
+target="${PERCEIVE_TARGET:-sphere}"
+case "$target" in
+    sphere|marked_person)
+        position_topic=/red_sphere_detector/red_sphere/position
+        distance_topic=/red_sphere_detector/red_sphere/distance
+        ;;
+    person)
+        position_topic=/person_detector/person/position
+        distance_topic=/person_detector/person/distance
+        ;;
+    *)
+        echo "Unsupported PERCEIVE_TARGET '$target' (use sphere, person, or marked_person)." >&2
+        exit 2
+        ;;
+esac
+
+cmake -S "$repo_dir" -B "$build_dir"
+cmake --build "$build_dir" --target main track_and_center
+
+kalman_pid=
+controller_pid=
+cleanup() {
+    local status=$?
+    trap - EXIT INT TERM
+
+    if [[ -n "$controller_pid" ]]; then
+        kill -INT -- "-$controller_pid" 2>/dev/null || true
+        wait "$controller_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$kalman_pid" ]]; then
+        kill -INT -- "-$kalman_pid" 2>/dev/null || true
+        wait "$kalman_pid" 2>/dev/null || true
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+echo "Starting Kalman target tracking and camera-based centering for ${target}."
+echo "Press Ctrl+C here to stop tracking and land; fly and perceive remain running."
+setsid bash -c 'trap - INT; exec "$@"' _ "$build_dir/main" --ros-args \
+    -p position_topic:="$position_topic" \
+    -p distance_topic:="$distance_topic" \
+    "$@" &
+kalman_pid=$!
+
+setsid bash -c 'trap - INT; exec "$@"' _ "$build_dir/track_and_center" --ros-args \
+    -p position_topic:="$position_topic" \
+    "$@" &
+controller_pid=$!
+
+wait -n "$kalman_pid" "$controller_pid"
+=======
 cmake -S "${repo_dir}" -B "${build_dir}"
 cmake --build "${build_dir}" --target track_and_center
 # Follow whichever detector `perceive` started (same PERCEIVE_TARGET switch).
@@ -25,3 +81,4 @@ if [[ -n "${detector}" ]]; then
         "$@"
 fi
 exec "${build_dir}/track_and_center" "$@"
+main

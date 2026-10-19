@@ -32,5 +32,6 @@ ament_target_dependencies(track_and_center
     geometry_msgs
     rclcpp
     sensor_msgs
+    std_msgs
 )
 target_link_libraries(track_and_center MAVSDK::mavsdk)

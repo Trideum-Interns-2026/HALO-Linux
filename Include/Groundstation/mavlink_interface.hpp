@@ -1,7 +1,7 @@
 #ifndef MAVLINK_INTERFACE_HPP
 #define MAVLINK_INTERFACE_HPP
 
-#include <mavsdk/mavlink/common/mavlink.h>
+#include <mavsdk/mavlink/ardupilotmega/mavlink.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>

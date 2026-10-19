@@ -1,65 +1,25 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -Ee -o pipefail
 
 source /opt/ros/jazzy/setup.bash
 if [[ -f /opt/ros2_ws/install/setup.bash ]]; then
     source /opt/ros2_ws/install/setup.bash
 fi
-
-target="${PERCEIVE_TARGET:-sphere}"
-case "$target" in
-    sphere)
-        detector_launch=perception.launch.py
-        spawn_command=(/workspace/Perception/scripts/spawn_sphere.sh)
-        position_topic=/red_sphere_detector/red_sphere/position
-        ;;
-    person)
-        detector_launch=person_detection.launch.py
-        spawn_command=(/workspace/Perception/scripts/spawn_person.sh)
-        position_topic=/person_detector/person/position
-        ;;
-    marked_person)
-        detector_launch=perception.launch.py
-        spawn_command=(env MARKER=1 /workspace/Perception/scripts/spawn_person.sh)
-        position_topic=/red_sphere_detector/red_sphere/position
-        ;;
-    *)
-        echo "Unsupported PERCEIVE_TARGET '$target' (use sphere, person, or marked_person)." >&2
-        exit 2
-        ;;
-esac
+set -u
 
 if ! command -v setsid >/dev/null 2>&1; then
-    echo "setsid is required to manage the simulator and ROS launch processes." >&2
+    echo "setsid is required to manage the simulator process." >&2
     exit 1
 fi
 
-repo_dir=/workspace
-build_dir="${repo_dir}/build"
-cmake -S "$repo_dir" -B "$build_dir"
-cmake --build "$build_dir" --target track_and_center
-
 sim_pid=
-bridge_pid=
-detector_pid=
-controller_pid=
 cleanup() {
     local status=$?
     trap - EXIT INT TERM
-    if [[ -n "$controller_pid" ]]; then
-        kill -INT -- "-$controller_pid" 2>/dev/null || true
-        wait "$controller_pid" 2>/dev/null || true
+    if [[ -n "$sim_pid" ]]; then
+        kill -TERM -- "-$sim_pid" 2>/dev/null || true
+        wait "$sim_pid" 2>/dev/null || true
     fi
-    for pid in "$detector_pid" "$bridge_pid" "$sim_pid"; do
-        if [[ -n "$pid" ]]; then
-            kill -TERM -- "-$pid" 2>/dev/null || true
-        fi
-    done
-    for pid in "$detector_pid" "$bridge_pid" "$sim_pid"; do
-        if [[ -n "$pid" ]]; then
-            wait "$pid" 2>/dev/null || true
-        fi
-    done
     exit "$status"
 }
 trap cleanup EXIT
@@ -71,7 +31,7 @@ PX4_SIM_MODEL="${PX4_SIM_MODEL:-gz_x500_depth}" \
     setsid /usr/local/bin/ros2-entrypoint.sh px4-gazebo "$@" &
 sim_pid=$!
 
-echo "Waiting for Gazebo's entity-create service..."
+echo "Waiting for Gazebo to become ready..."
 service_ready=false
 for _ in {1..60}; do
     if ! kill -0 "$sim_pid" 2>/dev/null; then
@@ -90,17 +50,5 @@ if [[ "$service_ready" != true ]]; then
     exit 1
 fi
 
-echo "Spawning ${target} target..."
-"${spawn_command[@]}"
-
-echo "Starting Gazebo camera bridge and ${target} detector (debug images disabled)..."
-setsid ros2 launch perception gz_harmonic_bridge.launch.py &
-bridge_pid=$!
-setsid ros2 launch perception "$detector_launch" publish_debug_image:=false &
-detector_pid=$!
-
-echo "Starting Kalman-filtered takeoff and target centering. Press Ctrl+C to land and stop."
-setsid "$build_dir/track_and_center" --ros-args \
-    -p position_topic:="$position_topic" &
-controller_pid=$!
-wait "$controller_pid"
+echo "PX4/Gazebo is ready. Start 'perceive' and then 'track' in separate terminals."
+wait "$sim_pid"
