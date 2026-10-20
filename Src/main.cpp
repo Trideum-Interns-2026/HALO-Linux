@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
         executor.add_node(tracking_node);
         executor.spin();
 
-        tracking_node->land();
+        tracking_node->stopOffboard();
         executor.remove_node(tracking_node);
         executor.remove_node(kalman_node);
         tracking_node.reset();

@@ -4,18 +4,15 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <mavsdk/mavsdk.h>
-#include <mavsdk/plugins/action/action.h>
 #include <mavsdk/plugins/offboard/offboard.h>
 #include <mavsdk/plugins/telemetry/telemetry.h>
 #include <rclcpp/rclcpp.hpp>
@@ -62,42 +59,28 @@ public:
                     std::isfinite(image_center_x_) && focal_length_x_ > 0.0;
             });
 
-        launchAndStartTracking(get_parameter("mavsdk_connection_url").as_string());
+        connectToVehicle(get_parameter("mavsdk_connection_url").as_string());
 
         centering_timer_ = create_wall_timer(
             100ms, std::bind(&TrackAndCenterNode::centerTarget, this));
         RCLCPP_INFO(
             get_logger(),
-            "Takeoff complete; centering target from '%s'. Press Ctrl+C to land.",
+            "Connected to PX4. Waiting for the vehicle to be armed before centering '%s'.",
             position_topic.c_str());
     }
 
-    void land() {
-        if (!action_ || !telemetry_ || !telemetry_->in_air()) {
+    void stopOffboard() {
+        if (!offboard_ || !offboard_started_) {
             return;
         }
 
-        if (offboard_) {
-            offboard_->set_velocity_body({0.0f, 0.0f, 0.0f, 0.0f});
-            offboard_->stop();
-        }
-
-        const auto result = action_->land();
-        if (result != mavsdk::Action::Result::Success) {
-            RCLCPP_ERROR(get_logger(), "Landing command failed: %s",
-                         std::to_string(static_cast<int>(result)).c_str());
-            return;
-        }
-
-        const auto landing_deadline = std::chrono::steady_clock::now() + 60s;
-        while (telemetry_->in_air() &&
-               std::chrono::steady_clock::now() < landing_deadline) {
-            std::this_thread::sleep_for(200ms);
-        }
+        offboard_->set_velocity_body({0.0f, 0.0f, 0.0f, 0.0f});
+        offboard_->stop();
+        offboard_started_ = false;
     }
 
 private:
-    void launchAndStartTracking(const std::string& connection_url) {
+    void connectToVehicle(const std::string& connection_url) {
         mavsdk_ = std::make_unique<mavsdk::Mavsdk>(
             mavsdk::Mavsdk::Configuration{mavsdk::ComponentType::GroundStation});
         mavsdk_->set_timeout_s(3.0);
@@ -124,7 +107,6 @@ private:
             throw std::runtime_error("No PX4 vehicle found on MAVSDK UDP 14540");
         }
 
-        action_ = std::make_unique<mavsdk::Action>(system);
         offboard_ = std::make_unique<mavsdk::Offboard>(system);
         telemetry_ = std::make_unique<mavsdk::Telemetry>(system);
 
@@ -140,74 +122,6 @@ private:
             vehicle_heading_deg_ = heading.heading_deg;
             have_vehicle_heading_ = true;
         });
-
-        while (rclcpp::ok() && !telemetry_->health_all_ok()) {
-            RCLCPP_INFO_THROTTLE(
-                get_logger(), *get_clock(), 2000,
-                "Waiting for PX4 health checks before arming");
-            std::this_thread::sleep_for(500ms);
-        }
-        if (!rclcpp::ok()) {
-            throw std::runtime_error("Interrupted while waiting for PX4 health checks");
-        }
-
-        auto result = action_->arm();
-        if (result != mavsdk::Action::Result::Success) {
-            const auto arm_deadline = std::chrono::steady_clock::now() + 5s;
-            while (rclcpp::ok() && !telemetry_->armed() &&
-                   std::chrono::steady_clock::now() < arm_deadline) {
-                std::this_thread::sleep_for(100ms);
-            }
-            if (!telemetry_->armed()) {
-                const auto health = telemetry_->health();
-                std::ostringstream error;
-                error << "Arming failed: " << result
-                      << " (code " << static_cast<int>(result) << ")"
-                      << "; PX4 armed=" << std::boolalpha << telemetry_->armed()
-                      << ", armable=" << health.is_armable
-                      << ", gyro_calibrated=" << health.is_gyrometer_calibration_ok
-                      << ", accelerometer_calibrated="
-                      << health.is_accelerometer_calibration_ok
-                      << ", magnetometer_calibrated="
-                      << health.is_magnetometer_calibration_ok
-                      << ", local_position_ok=" << health.is_local_position_ok
-                      << ", global_position_ok=" << health.is_global_position_ok
-                      << ", home_position_ok=" << health.is_home_position_ok;
-                throw std::runtime_error(error.str());
-            }
-            RCLCPP_WARN(
-                get_logger(),
-                "Arm command returned code %d, but PX4 reports the vehicle armed; "
-                "continuing to takeoff",
-                static_cast<int>(result));
-        }
-
-        result = action_->takeoff();
-        if (result != mavsdk::Action::Result::Success) {
-            throw std::runtime_error(
-                "Takeoff failed with code " +
-                std::to_string(static_cast<int>(result)));
-        }
-
-        const auto takeoff_deadline = std::chrono::steady_clock::now() + 30s;
-        while (rclcpp::ok() && !telemetry_->in_air() &&
-               std::chrono::steady_clock::now() < takeoff_deadline) {
-            std::this_thread::sleep_for(200ms);
-        }
-        if (!telemetry_->in_air()) {
-            action_->land();
-            throw std::runtime_error("Timed out waiting for PX4 to report airborne");
-        }
-        std::this_thread::sleep_for(3s);
-
-        offboard_->set_velocity_body({0.0f, 0.0f, 0.0f, 0.0f});
-        const auto offboard_result = offboard_->start();
-        if (offboard_result != mavsdk::Offboard::Result::Success) {
-            action_->land();
-            throw std::runtime_error(
-                "Starting offboard control failed with code " +
-                std::to_string(static_cast<int>(offboard_result)));
-        }
     }
 
     void centerTarget() {
@@ -239,6 +153,38 @@ private:
             std_msgs::msg::Float64 heading;
             heading.data = vehicle_heading_deg;
             vehicle_heading_pub_->publish(heading);
+        }
+
+        if (!telemetry_->armed()) {
+            if (offboard_started_) {
+                stopOffboard();
+                RCLCPP_WARN(
+                    get_logger(),
+                    "Vehicle is disarmed; stopped centering. Arm the vehicle to resume.");
+            }
+            return;
+        }
+
+        if (!offboard_started_) {
+            const auto setpoint_result =
+                offboard_->set_velocity_body({0.0f, 0.0f, 0.0f, 0.0f});
+            if (setpoint_result != mavsdk::Offboard::Result::Success) {
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 2000,
+                    "Cannot prepare offboard centering setpoint: %s",
+                    std::to_string(static_cast<int>(setpoint_result)).c_str());
+                return;
+            }
+            const auto start_result = offboard_->start();
+            if (start_result != mavsdk::Offboard::Result::Success) {
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 2000,
+                    "Cannot start centering yet: %s",
+                    std::to_string(static_cast<int>(start_result)).c_str());
+                return;
+            }
+            offboard_started_ = true;
+            RCLCPP_INFO(get_logger(), "Vehicle is armed; target centering is active.");
         }
 
         float yaw_rate_deg_s = 0.0f;
@@ -302,7 +248,6 @@ private:
     }
 
     std::unique_ptr<mavsdk::Mavsdk> mavsdk_;
-    std::unique_ptr<mavsdk::Action> action_;
     std::unique_ptr<mavsdk::Offboard> offboard_;
     std::unique_ptr<mavsdk::Telemetry> telemetry_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr position_sub_;
@@ -327,6 +272,7 @@ private:
     bool have_vehicle_position_{false};
     bool have_vehicle_heading_{false};
     bool bearing_filter_initialized_{false};
+    bool offboard_started_{false};
 };
 
 #endif
