@@ -28,17 +28,15 @@
   // display/VirtualGL bits.
   "postCreateCommand": "bash /workspace/.devcontainer/spark/post-create.sh",
 
-  // Xvfb + openbox + coturn + Selkies, every (re)start.
+  // Xvfb + openbox + Selkies, every (re)start.
   "postStartCommand": "bash /usr/local/bin/start-desktop.sh",
 
-  // Both go through this developer's own Remote-SSH tunnel; nothing is
-  // published on the Spark itself. 8080 is the Selkies page, 3478 is the
-  // TURN relay the browser needs for the WebRTC media to follow the same
-  // tunnel.
-  "forwardPorts": [8080, 3478],
+  // Goes through this developer's own Remote-SSH tunnel; nothing is
+  // published on the Spark itself. Selkies 2.x serves the page AND the
+  // video stream (WebSocket) on this single port.
+  "forwardPorts": [8080],
   "portsAttributes": {
-    "8080": { "label": "Selkies desktop", "onAutoForward": "openBrowser" },
-    "3478": { "label": "Selkies TURN relay", "onAutoForward": "silent" }
+    "8080": { "label": "Selkies desktop", "onAutoForward": "openBrowser" }
   },
 
   "customizations": {

@@ -12,7 +12,7 @@ laptop (WSL2)                        DGX Spark
 VS Code ──Remote-SSH (ssh)───►  ~/devs/<you>/halo-linux  (your clone, .env HALO_DEV=<you>)
    │                                   │  Reopen in Container (Spark profile)
    │                                   ▼
-   │  port-forward 8080/3478   halo-<you>-px4-sitl-1   ──┐
+   │  port-forward 8080        halo-<you>-px4-sitl-1   ──┐
 browser ◄── Selkies (NVENC) ──  Xvfb + Gazebo (VirtualGL)│  bridge: halo-inference
                                 yolo_person_detector ────┼──► triton  (one TensorRT
                                                          │   engine, dynamic batching)
@@ -148,8 +148,8 @@ stops with *"HALO_DEV is not set"*, see section 4.
 - **Gazebo / the desktop**: VS Code's *Ports* tab shows **Selkies desktop**
   (8080) — click the globe. Log in with user = your `HALO_DEV`, password =
   `SELKIES_BASIC_AUTH_PASSWORD` from your `.env` (auto-generated on first
-  open). Port 3478 is forwarded alongside it; leave it — that's the TURN
-  relay that lets the WebRTC video follow your SSH tunnel.
+  open). Page and video both ride that one forwarded port (Selkies 2.x
+  streams over a WebSocket), so there is nothing else to forward.
 - **`fly`, `perceive`, `track`, `spawn_person`** work as before. `fly` and
   `perceive` are wrapped in `vglrun -d egl` so Gazebo's OpenGL hits the
   NVIDIA GPU rather than Xvfb's software renderer. If you launch `gz sim`
@@ -179,12 +179,12 @@ desktop.
 | Symptom | Check |
 |---|---|
 | `nvidia.com/gpu` device not found | `docker info \| grep -i cdi`, section 1 |
-| Selkies page loads but stays black / "connecting" | Port 3478 forwarded? `cat /tmp/desktop/coturn.log`, `/tmp/desktop/selkies.log` |
+| Selkies page loads but stays black / "connecting" | `cat /tmp/desktop/selkies.log` — first line should say `encodes H264 ... on nvenc`; if not, `NVIDIA_DRIVER_CAPABILITIES`/CDI (section 1) |
 | Gazebo slow, `glxinfo -B` says llvmpipe | Run under `vglrun -d egl`; `vglrun -d egl glxinfo -B` should say NVIDIA |
 | Detector logs `skipped N (inference unavailable)` | `docker compose -f infra/triton/docker-compose.yml ps`; is the dev container on `halo-inference`? |
 | Someone else's drone in your sim | Your `.env` has the same `HALO_DEV` as theirs |
 | `ssh spark` hangs or is refused | Same network as the Spark? `ping 10.1.30.146`; key appended to `~/.ssh/authorized_keys` on the Spark (section 2)? |
-| Remote-SSH connects but Selkies tab never opens | Check the *Ports* tab: 8080 and 3478 must be forwarded (VS Code does this automatically for the Spark profile) |
+| Remote-SSH connects but Selkies tab never opens | Check the *Ports* tab: 8080 must be forwarded (VS Code does this automatically for the Spark profile) |
 
 Run `scripts/spark/verify.sh` on the Spark host for an end-to-end check of
 all of the above.

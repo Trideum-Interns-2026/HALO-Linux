@@ -73,23 +73,17 @@ services:
       - ROS_LOCALHOST_ONLY=1
       - GZ_IP=127.0.0.1
       # --- Selkies remote desktop ---------------------------------------
-      - SELKIES_ENCODER=nvh264enc
+      # Selkies 2.x streams over a plain WebSocket on this one port, which
+      # VS Code forwards through the developer's SSH tunnel — no WebRTC/TURN
+      # relay and no second port. h264enc is encoded on NVENC (that's what
+      # the `video` half of NVIDIA_DRIVER_CAPABILITIES=all is for).
+      - SELKIES_ENCODER=h264enc
       - SELKIES_PORT=8080
-      - SELKIES_ENABLE_AUDIO=false
+      - SELKIES_AUDIO_ENABLED=false
       - SELKIES_ENABLE_BASIC_AUTH=true
       - SELKIES_BASIC_AUTH_USER=${HALO_DEV}
       # Generated into .env on first open by initialize.sh.
       - SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_BASIC_AUTH_PASSWORD:?run .devcontainer/spark/initialize.sh}
-      # WebRTC media cannot cross an SSH port-forward on its own (only the
-      # signaling websocket does), so a coturn inside this container relays
-      # it over TCP and VS Code forwards that port too. 127.0.0.1 is what the
-      # browser dials — the forwarded port on the laptop.
-      - SELKIES_TURN_HOST=127.0.0.1
-      - SELKIES_TURN_PORT=3478
-      - SELKIES_TURN_PROTOCOL=tcp
-      - SELKIES_TURN_USERNAME=${HALO_DEV}
-      - SELKIES_TURN_PASSWORD=${SELKIES_BASIC_AUTH_PASSWORD}
-      - SELKIES_TURN_TLS=false
     devices:
       - nvidia.com/gpu=all
 
