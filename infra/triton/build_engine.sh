@@ -26,6 +26,7 @@ BASE_IMAGE="${BASE_IMAGE:-$(docker images --format '{{.Repository}}:{{.Tag}}' | 
 OUT="$HERE/model_repository/yolo_person/1"
 WORK="$HERE/.build"
 IMGSZ=640
+MODEL="${MODEL:-yolov8x}"
 
 if [ -z "$BASE_IMAGE" ]; then
     echo "error: no halo-base:<dev> image found - open the repo in a Spark dev container once first (or set BASE_IMAGE)" >&2
@@ -34,14 +35,18 @@ fi
 
 mkdir -p "$OUT" "$WORK"
 
-echo "==> [1/2] yolov8n.pt -> ONNX  (in $BASE_IMAGE)"
-docker run --rm -v "$WORK:/out" "$BASE_IMAGE" python3 - <<EOF
+echo "==> [1/2] ${MODEL}.pt -> ONNX  (in $BASE_IMAGE)"
+docker run --rm -i -v "$WORK:/out" "$BASE_IMAGE" python3 - <<EOF
+import subprocess, sys
+subprocess.run(
+    [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--break-system-packages",
+     "numpy<2", "onnx>=1.12.0,<2.0.0", "onnxruntime", "onnxslim>=0.1.82"],
+    check=True,
+)
 from ultralytics import YOLO
 import shutil
-# dynamic=True: batch dimension is free so Triton can batch; H/W fixed at
-# $IMGSZ via the trtexec shapes below.
-path = YOLO('/opt/yolo/yolov8n.pt').export(format='onnx', imgsz=$IMGSZ, dynamic=True, simplify=True, opset=17)
-shutil.copy(path, '/out/yolov8n.onnx')
+path = YOLO('${MODEL}.pt').export(format='onnx', imgsz=$IMGSZ, dynamic=True, simplify=True, opset=17)
+shutil.copy(path, '/out/${MODEL}.onnx')
 print('wrote', path)
 EOF
 
@@ -49,7 +54,7 @@ echo "==> [2/2] ONNX -> TensorRT plan  (nvcr.io/nvidia/tensorrt:${TRITON_TAG}-py
 docker run --rm --device nvidia.com/gpu=all \
     -v "$WORK:/work" -v "$OUT:/out" \
     "nvcr.io/nvidia/tensorrt:${TRITON_TAG}-py3" \
-    trtexec --onnx=/work/yolov8n.onnx --saveEngine=/out/model.plan --fp16 \
+        trtexec --onnx=/work/${MODEL}.onnx --saveEngine=/out/model.plan --fp16 \
         --minShapes=images:1x3x${IMGSZ}x${IMGSZ} \
         --optShapes=images:4x3x${IMGSZ}x${IMGSZ} \
         --maxShapes=images:8x3x${IMGSZ}x${IMGSZ} \

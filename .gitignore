@@ -36,3 +36,4 @@ infra/triton/model_repository/*/[0-9]*/
 *.onnx
 *.plan
 *.engine
+.env
