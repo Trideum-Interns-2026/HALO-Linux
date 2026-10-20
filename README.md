@@ -155,7 +155,7 @@ Earlier detectors are still in the package, selected by setting
 ## Running on the NVIDIA DGX Spark (ARM64)
 
 The Spark is a shared, headless host: each teammate connects from their
-laptop through Brev + VS Code Remote-SSH, opens their own clone, and
+laptop through plain SSH + VS Code Remote-SSH, opens their own clone, and
 "Reopen in Container" with the **PX4 SITL Dev Container (NVIDIA Spark)**
 profile. Gazebo streams to your browser (Selkies, GPU-encoded) and YOLO runs
 on one shared TensorRT engine behind NVIDIA Triton, so five people's sims

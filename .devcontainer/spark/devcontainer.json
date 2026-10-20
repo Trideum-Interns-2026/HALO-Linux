@@ -2,7 +2,7 @@
   "name": "PX4 SITL Dev Container (NVIDIA Spark)",
 
   // Spark profile: one container per developer on the headless DGX Spark,
-  // reached via Brev + VS Code Remote-SSH. Same base compose file as
+  // reached via SSH + VS Code Remote-SSH. Same base compose file as
   // ../devcontainer.json, but docker-compose.spark.yml replaces the WSLg
   // override with a per-developer project (named from HALO_DEV in .env),
   // bridge networking, CDI GPU access, a Selkies remote desktop, and the

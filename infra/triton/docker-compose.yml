@@ -13,7 +13,7 @@
 #
 # Reachable from the dev containers as `triton:8001` (gRPC) over the
 # internal `halo-inference` bridge. No ports are published on the host —
-# this hop never leaves the Spark, so Brev/WAN networking is not involved.
+# this hop never leaves the Spark, so SSH/WAN networking is not involved.
 
 name: halo-triton
 

@@ -1,5 +1,5 @@
 # NVIDIA DGX Spark override — one container PER DEVELOPER, reached through
-# Brev + VS Code Remote-SSH, never from a desktop session on the Spark itself
+# SSH + VS Code Remote-SSH, never from a desktop session on the Spark itself
 # (the Spark is a headless host now; see docs/spark/README.md).
 #
 # Why this looks different from docker-compose.wsl.yml:

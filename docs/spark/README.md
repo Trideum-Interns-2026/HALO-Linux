@@ -1,15 +1,15 @@
-# Developing on the DGX Spark (via Brev)
+# Developing on the DGX Spark (via SSH)
 
 The Spark is a **headless shared host**. Nobody opens VS Code on its own
-monitor any more. Each teammate connects from their laptop with Brev +
-VS Code Remote-SSH, opens *their own* clone, and "Reopen in Container"
+monitor any more. Each teammate connects from their laptop with plain SSH
+(VS Code Remote-SSH), opens *their own* clone, and "Reopen in Container"
 with the Spark profile. Everything — build, sim, Gazebo rendering, YOLO —
 runs on the Spark's GPU; the laptop only shows a browser tab and an editor.
 
 ```
 laptop (WSL2)                        DGX Spark
 ───────────────                      ─────────────────────────────────────────
-VS Code ──Remote-SSH (Brev)──►  ~/devs/<you>/halo-linux  (your clone, .env HALO_DEV=<you>)
+VS Code ──Remote-SSH (ssh)───►  ~/devs/<you>/halo-linux  (your clone, .env HALO_DEV=<you>)
    │                                   │  Reopen in Container (Spark profile)
    │                                   ▼
    │  port-forward 8080/3478   halo-<you>-px4-sitl-1   ──┐
@@ -46,14 +46,21 @@ docker info | grep -i -A3 cdi          # expect:  nvidia.com/gpu=all  /  nvidia.
 docker run --rm --device nvidia.com/gpu=all ubuntu nvidia-smi
 ```
 
-## 2. Host: register with Brev
+## 2. Host: SSH access
+
+The Spark runs a stock OpenSSH server on port 22. Hostname `spark-d19c`,
+lab-network address `10.1.30.146` (check with `hostname -I` if it moves).
+Everyone logs in as the shared `ascteinterns` user with their **own SSH
+key** — no passwords over the wire, and no third-party tunnel service.
 
 ```bash
-curl -fsSL https://brev.nvidia.com/install | bash
-brev login
-brev register "halo-dgx-spark"
-brev enable-ssh
-brev grant-ssh <teammate-brev-email>     # once per teammate
+# on the Spark, once per teammate: append the public key they send you
+echo "<contents of teammate's id_ed25519.pub>" >> ~/.ssh/authorized_keys
+chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys
+
+# optional hardening once every key is in
+sudo sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
 ```
 
 From here on treat the Spark as headless: no local desktop session, no
@@ -93,8 +100,16 @@ We all log in as the same Linux user, so **your clone's `.env` is what
 keeps your containers separate from everyone else's.**
 
 ```bash
-# from your laptop, in WSL2
-brev open halo-dgx-spark          # plain SSH shell on the Spark
+# on your laptop (WSL2, macOS, or Windows PowerShell), once
+ssh-keygen -t ed25519 -C "<you>@halo"      # send ~/.ssh/id_ed25519.pub to the Spark admin
+cat >> ~/.ssh/config <<'EOF'
+Host spark
+    HostName 10.1.30.146
+    User ascteinterns
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+EOF
+ssh spark                                   # plain SSH shell on the Spark
 
 # on the Spark
 mkdir -p ~/devs/<you> && cd ~/devs/<you>
@@ -109,16 +124,15 @@ Never work in someone else's directory under `~/devs/`.
 
 ## 5. Developer: VS Code from your laptop
 
-Brev documents the Windows path as **WSL2 → `brev open <name> code`**.
-One-time fix: VS Code launched from WSL2 would otherwise use the *Windows*
-`ssh.exe`, which can't run Brev's tunnel helper. Follow Brev's Windows/WSL
-troubleshooting guide to point `remote.SSH.path` at a small wrapper script
-that calls WSL's `ssh`.
+Install the **Remote - SSH** extension in VS Code. It reads the same
+`~/.ssh/config` entry from section 4, so there is nothing Spark-specific
+to configure. On Windows, put that entry in
+`C:\Users\<you>\.ssh\config` (the built-in Windows `ssh.exe` works fine —
+no WSL wrapper script needed), or if you prefer to drive VS Code from
+WSL2, keep it in WSL's `~/.ssh/config` and launch `code` from there.
 
-```bash
-# laptop, WSL2
-brev open halo-dgx-spark code
-```
+Connect with **Remote-SSH: Connect to Host… → `spark`** (or from a
+terminal: `code --remote ssh-remote+spark ~/devs/<you>/halo-linux`).
 
 In the VS Code window that opens on the Spark: **File → Open Folder →
 `~/devs/<you>/halo-linux`**, then **Dev Containers: Reopen in Container**
@@ -169,6 +183,8 @@ desktop.
 | Gazebo slow, `glxinfo -B` says llvmpipe | Run under `vglrun -d egl`; `vglrun -d egl glxinfo -B` should say NVIDIA |
 | Detector logs `skipped N (inference unavailable)` | `docker compose -f infra/triton/docker-compose.yml ps`; is the dev container on `halo-inference`? |
 | Someone else's drone in your sim | Your `.env` has the same `HALO_DEV` as theirs |
+| `ssh spark` hangs or is refused | Same network as the Spark? `ping 10.1.30.146`; key appended to `~/.ssh/authorized_keys` on the Spark (section 2)? |
+| Remote-SSH connects but Selkies tab never opens | Check the *Ports* tab: 8080 and 3478 must be forwarded (VS Code does this automatically for the Spark profile) |
 
 Run `scripts/spark/verify.sh` on the Spark host for an end-to-end check of
 all of the above.
