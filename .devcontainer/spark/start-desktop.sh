@@ -1,10 +1,12 @@
 #!/bin/bash
 # Brings up the in-container desktop that Gazebo renders into and Selkies
-# streams out of, then the ground station on it. Idempotent — VS Code runs
-# it as postStartCommand every time the container (re)starts, and you can
-# re-run it by hand (`desktop`) if anything died.
+# streams out of, plus the MAVLink bridge QGroundControl on the laptop
+# connects to. Idempotent — VS Code runs it as postStartCommand every time
+# the container (re)starts, and you can re-run it by hand (`desktop`) if
+# anything died.
 #
-#   Xvfb :0  ──►  openbox  ──►  selkies (WebSocket on :8080)  ──►  QGroundControl
+#   Xvfb :0  ──►  openbox  ──►  selkies (WebSocket on :8080)
+#   PX4 ──UDP 14550──►  socat  ──TCP 5760──►  (VS Code forward)  ──►  QGC on the laptop
 #
 # Every daemon is started under setsid, in its own session. VS Code tears
 # down postStartCommand's process group as soon as this script returns,
@@ -29,6 +31,7 @@ export DISPLAY=":${DISPLAY_NUM}"
 # Keep in sync with the 1080p camera/Gazebo window sizes used elsewhere.
 RESOLUTION="${SELKIES_RESOLUTION:-1920x1080}"
 PORT="${SELKIES_PORT:-8080}"
+MAVLINK_TCP_PORT="${MAVLINK_TCP_PORT:-5760}"
 
 # daemon <log name> <command...>: detached, logging to $LOG/<name>.log
 daemon() {
@@ -81,10 +84,26 @@ if [ "${code:-000}" = "000" ]; then
     echo "warning: Selkies is not answering on :${PORT} yet — see $LOG/selkies.log" >&2
 fi
 
-# --- 4. QGroundControl --------------------------------------------------------
-# Ground station on the same desktop (see /usr/local/bin/qgc for why it
-# lives in here and not on the laptop). Step 1 of the README's "Running
-# it" — "Open QGroundControl" — is therefore already done when you connect.
-/usr/local/bin/qgc || true
+# --- 4. MAVLink bridge for QGroundControl on the laptop ---------------------
+# With bridge networking the sim's MAVLink never leaves this container, and
+# a VS Code/SSH port forward only carries TCP — so a QGC on the laptop can't
+# just listen on UDP 14550 like it does on WSL. Instead, socat takes the
+# GCS stream PX4 sends to 127.0.0.1:14550 (from its port 18570; see
+# /opt/px4-gazebo/etc/init.d-posix/px4-rc.mavlink) and re-serves it as a
+# TCP stream on MAVLINK_TCP_PORT, which VS Code forwards alongside Selkies'
+# port. QGC: Comm Links → TCP → localhost:5760 (one QGC per container).
+# Bytes QGC sends go back out the same UDP socket to PX4's 18570.
+#
+# sourceport=18570 pins the UDP side to PX4: anything else that talks to
+# 14550 inside the container (`track`'s ROI messages, say) is ignored
+# rather than becoming the peer QGC's commands get sent to. MAVLink is
+# self-framing, so the TCP stream needs no extra packetisation. The
+# explicit *4-LISTEN forms matter: socat 1.8's plain UDP-LISTEN refuses to
+# start ("unknown address family 0").
+if ! pgrep -f "socat.*TCP4-LISTEN:${MAVLINK_TCP_PORT}" >/dev/null 2>&1; then
+    daemon mavlink-bridge socat -d \
+        "TCP4-LISTEN:${MAVLINK_TCP_PORT},reuseaddr,fork" \
+        "UDP4-LISTEN:14550,reuseaddr,sourceport=18570"
+fi
 
-echo "desktop up: Xvfb ${DISPLAY}, Selkies on :${PORT}, QGroundControl (logs in $LOG)"
+echo "desktop up: Xvfb ${DISPLAY}, Selkies on :${PORT}, MAVLink→QGC on tcp:${MAVLINK_TCP_PORT} (logs in $LOG)"

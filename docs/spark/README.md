@@ -12,9 +12,9 @@ laptop (WSL2)                        DGX Spark
 VS Code ──Remote-SSH (ssh)───►  ~/devs/<you>/halo-linux  (your clone, .env HALO_DEV=<you>)
    │                                   │  Reopen in Container (Spark profile)
    │                                   ▼
-   │  port-forward 8080        halo-<you>-px4-sitl-1   ──┐
+   │  port-forward 8080, 5760  halo-<you>-px4-sitl-1   ──┐
 browser ◄── Selkies (NVENC) ──  Xvfb + Gazebo (VirtualGL)│  bridge: halo-inference
-                                     + QGroundControl    │
+QGC ◄───── MAVLink/TCP ───────  socat ◄─UDP─ PX4 SITL    │
                                 yolo_person_detector ────┼──► triton  (one TensorRT
                                                          │   engine, dynamic batching)
                                 halo-<other>-px4-sitl-1 ─┘
@@ -151,16 +151,21 @@ stops with *"HALO_DEV is not set"*, see section 4.
   `SELKIES_BASIC_AUTH_PASSWORD` from your `.env` (auto-generated on first
   open). Page and video both ride that one forwarded port (Selkies 2.x
   streams over a WebSocket), so there is nothing else to forward.
-- **QGroundControl is already open on that desktop.** It starts with the
-  container (`start-desktop.sh`, every (re)start) and is connected to PX4
-  as soon as `fly` is up — so step 1 of the README's "Running it" is done
-  for you, and `track`'s ROI updates land in it. Closed the window? `qgc`
-  brings it back (`qgc stop`, `qgc log` also exist). Its settings and map
-  cache live in a per-developer volume, so they survive a rebuild. A QGC on
-  your laptop can't be used instead: with bridge networking the sim's
-  MAVLink never leaves the container, and SSH can't forward UDP.
-- **`desktop`** re-runs the whole desktop bring-up (Xvfb, Selkies, QGC) in
-  place if something died; it's idempotent.
+- **QGroundControl runs on your laptop**, with your own gamepad, same as
+  before — install it there if you haven't. What's different from WSL is
+  the link: the sim's MAVLink never leaves your container, and the SSH
+  tunnel only carries TCP, so QGC's usual UDP-14550 autoconnect finds
+  nothing. Instead your container bridges the stream to TCP on **5760**,
+  which VS Code forwards next to the Selkies port (*Ports* tab:
+  "MAVLink → QGroundControl"). Once, in QGC: *Application Settings → Comm
+  Links → Add* — type **TCP**, server address **localhost**, port **5760**,
+  tick *Automatically Connect on Start*, then *Connect*. After that it's
+  step 1 of the README's "Running it" as usual; the vehicle appears once
+  `fly` is up. Everyone uses the same `localhost:5760` on their own laptop
+  because each container has its own bridge and each tunnel is private —
+  nothing is published on the Spark. One QGC per container at a time.
+- **`desktop`** re-runs the whole bring-up (Xvfb, Selkies, MAVLink bridge)
+  in place if something died; it's idempotent.
 - **`fly`, `perceive`, `track`, `spawn_person`** work as before. `fly` and
   `perceive` are wrapped in `vglrun -d egl` so Gazebo's OpenGL hits the
   NVIDIA GPU rather than Xvfb's software renderer. If you launch `gz sim`
@@ -185,8 +190,8 @@ stops with *"HALO_DEV is not set"*, see section 4.
 | `nvidia.com/gpu` device not found | `docker info \| grep -i cdi`, section 1 |
 | Selkies page spins forever / never loads | Nothing is listening on 8080 in *your* container. `desktop` in a container terminal (or `docker exec halo-<you>-px4-sitl-1 bash /usr/local/bin/start-desktop.sh` from the host). A forward made from a plain Remote-SSH window hits the Spark host, where nothing is published — it must be the window attached to the container |
 | Selkies page loads but stays black / "connecting" | `cat /tmp/desktop/selkies.log` — first line should say `encodes H264 ... on nvenc`; if not, `NVIDIA_DRIVER_CAPABILITIES`/CDI (section 1) |
-| QGroundControl window missing / closed | `qgc` (log: `/tmp/desktop/qgc.log`). "Second instance already running" → `qgc stop` then `qgc` |
-| QGroundControl shows no vehicle | Is `fly` running? PX4 sends to 127.0.0.1:14550 inside the container; `qgc log` for link errors |
+| QGroundControl says *Disconnected* / no vehicle | Link must be **TCP** `localhost:5760`, not UDP (section 6). 5760 in the *Ports* tab? `fly` running? `cat /tmp/desktop/mavlink-bridge.log` in the container; `desktop` restarts the bridge |
+| QGC connects but a second person's QGC can't | Each container serves one QGC at a time; they need their own container (own clone + `HALO_DEV`), not yours |
 | Gazebo slow, `glxinfo -B` says llvmpipe | Run under `vglrun -d egl`; `vglrun -d egl glxinfo -B` should say NVIDIA |
 | Detector logs `skipped N (inference unavailable)` | `docker compose -f infra/triton/docker-compose.yml ps`; is the dev container on `halo-inference`? |
 | Someone else's drone in your sim | Your `.env` has the same `HALO_DEV` as theirs |

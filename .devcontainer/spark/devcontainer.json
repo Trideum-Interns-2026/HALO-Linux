@@ -28,15 +28,18 @@
   // display/VirtualGL bits.
   "postCreateCommand": "bash /workspace/.devcontainer/spark/post-create.sh",
 
-  // Xvfb + openbox + Selkies + QGroundControl, every (re)start.
+  // Xvfb + openbox + Selkies + MAVLink TCP bridge, every (re)start.
   "postStartCommand": "bash /usr/local/bin/start-desktop.sh",
 
-  // Goes through this developer's own Remote-SSH tunnel; nothing is
-  // published on the Spark itself. Selkies 2.x serves the page AND the
-  // video stream (WebSocket) on this single port.
-  "forwardPorts": [8080],
+  // Both go through this developer's own Remote-SSH tunnel; nothing is
+  // published on the Spark itself. 8080: Selkies 2.x serves the page AND
+  // the video stream (WebSocket) on this one port. 5760: MAVLink as a TCP
+  // stream for QGroundControl on the laptop (QGC → Comm Links → TCP,
+  // localhost:5760). UDP can't be forwarded, which is why it's TCP.
+  "forwardPorts": [8080, 5760],
   "portsAttributes": {
-    "8080": { "label": "Selkies desktop", "onAutoForward": "openBrowser" }
+    "8080": { "label": "Selkies desktop", "onAutoForward": "openBrowser" },
+    "5760": { "label": "MAVLink → QGroundControl (laptop)", "onAutoForward": "silent" }
   },
 
   "customizations": {

@@ -57,11 +57,6 @@ services:
     # developer kills would sit there as a zombie — and QGroundControl's
     # single-instance lock sees a zombie as "still running".
     init: true
-    volumes:
-      # QGroundControl runs as `ubuntu` (see .devcontainer/spark/qgc); its
-      # settings, link config and map-tile cache live here and survive the
-      # container being recreated. Per-project volume, so per developer.
-      - qgc-home:/home/ubuntu
     environment:
       # Needed on top of the CDI device: `graphics` for EGL/OpenGL and
       # `video` for NVENC — compute-only (the toolkit default) gives a GPU
@@ -83,10 +78,10 @@ services:
       - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
       - ROS_LOCALHOST_ONLY=1
       - GZ_IP=127.0.0.1
-      # --- Selkies remote desktop + QGroundControl ----------------------
-      # QGroundControl is autostarted on this desktop by start-desktop.sh;
-      # PX4 SITL sends its GCS MAVLink to 127.0.0.1:14550 inside the
-      # container, so nothing needs forwarding for it.
+      # --- Selkies remote desktop ---------------------------------------
+      # (QGroundControl is NOT in here: it runs on the developer's laptop,
+      # reached through the MAVLink TCP bridge start-desktop.sh starts on
+      # MAVLINK_TCP_PORT, forwarded by VS Code like Selkies' port.)
       # Selkies 2.x streams over a plain WebSocket on this one port, which
       # VS Code forwards through the developer's SSH tunnel — no WebRTC/TURN
       # relay and no second port. h264enc is encoded on NVENC (that's what
@@ -98,11 +93,14 @@ services:
       - SELKIES_BASIC_AUTH_USER=${HALO_DEV}
       # Generated into .env on first open by initialize.sh.
       - SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_BASIC_AUTH_PASSWORD:?run .devcontainer/spark/initialize.sh}
+      # --- MAVLink bridge for QGroundControl on the laptop ---------------
+      # PX4 SITL sends its GCS stream to 127.0.0.1:14550 inside the
+      # container; socat re-serves it as a TCP stream here. Every developer
+      # gets the same port because every container has its own bridge and
+      # its own tunnel — nothing is published on the Spark.
+      - MAVLINK_TCP_PORT=5760
     devices:
       - nvidia.com/gpu=all
-
-volumes:
-  qgc-home:
 
 networks:
   # Created by initialize.sh (or infra/triton/docker-compose.yml, whichever
