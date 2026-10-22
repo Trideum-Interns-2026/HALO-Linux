@@ -100,10 +100,19 @@ fi
 # self-framing, so the TCP stream needs no extra packetisation. The
 # explicit *4-LISTEN forms matter: socat 1.8's plain UDP-LISTEN refuses to
 # start ("unknown address family 0").
+#
+# Supervised: socat has been seen missing after container start with
+# nothing in its log, and a bridge that is silently down looks to the
+# developer exactly like "QGC won't connect". The loop restarts it and
+# timestamps every exit in the log.
 if ! pgrep -f "socat.*TCP4-LISTEN:${MAVLINK_TCP_PORT}" >/dev/null 2>&1; then
-    daemon mavlink-bridge socat -d \
-        "TCP4-LISTEN:${MAVLINK_TCP_PORT},reuseaddr,fork" \
-        "UDP4-LISTEN:14550,reuseaddr,sourceport=18570"
+    daemon mavlink-bridge bash -c '
+        while true; do
+            socat -d "TCP4-LISTEN:$0,reuseaddr,fork" \
+                      "UDP4-LISTEN:14550,reuseaddr,sourceport=18570"
+            echo "$(date -Is) socat exited (rc=$?), restarting in 1 s" >&2
+            sleep 1
+        done' "${MAVLINK_TCP_PORT}"
 fi
 
 echo "desktop up: Xvfb ${DISPLAY}, Selkies on :${PORT}, MAVLink→QGC on tcp:${MAVLINK_TCP_PORT} (logs in $LOG)"
