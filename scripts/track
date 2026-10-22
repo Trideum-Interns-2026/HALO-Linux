@@ -11,7 +11,6 @@ script_path="$(readlink -f "${BASH_SOURCE[0]}")"
 repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 build_dir="${repo_dir}/build"
 
-fly
 target="${PERCEIVE_TARGET:-sphere}"
 case "$target" in
     sphere|marked_person)
@@ -36,28 +35,4 @@ echo "Press Ctrl+C here to stop tracking and land; fly and perceive remain runni
 exec "$build_dir/main" --ros-args \
     -p position_topic:="$position_topic" \
     -p distance_topic:="$distance_topic" \
-    "$@" &
-kalman_pid=$!
-
-setsid bash -c 'trap - INT; exec "$@"' _ "$build_dir/track_and_center" --ros-args \
-    -p position_topic:="$position_topic" \
-    "$@" &
-controller_pid=$!
-
-wait -n "$kalman_pid" "$controller_pid"
-cmake -S "${repo_dir}" -B "${build_dir}"
-cmake --build "${build_dir}" --target track_and_center
-# Follow whichever detector `perceive` started (same PERCEIVE_TARGET switch).
-case "${PERCEIVE_TARGET:-yolo_person}" in
-    person) detector=/person_detector/person ;;
-    yolo_person) detector=/yolo_person_detector/person ;;
-    *) detector="" ;;
-esac
-if [[ -n "${detector}" ]]; then
-    exec "${build_dir}/main" --ros-args \
-        -p position_topic:=${detector}/position \
-        -p distance_topic:=${detector}/distance \
-        "$@"
-fi
-exec "${build_dir}/track_and_center" "$@"
-main
+    "$@"
