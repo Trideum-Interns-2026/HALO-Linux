@@ -1,9 +1,12 @@
 {
   "name": "PX4 SITL Dev Container (NVIDIA Spark)",
 
-  // Same as ../devcontainer.json, but for the NVIDIA DGX Spark (native ARM64
-  // Linux) — swaps the WSLg override for docker-compose.spark.yml, which uses
-  // nvidia-container-toolkit + plain X11 instead of WSL-only mounts.
+  // Spark profile: one container per developer on the headless DGX Spark,
+  // reached via SSH + VS Code Remote-SSH. Same base compose file as
+  // ../devcontainer.json, but docker-compose.spark.yml replaces the WSLg
+  // override with a per-developer project (named from HALO_DEV in .env),
+  // bridge networking, CDI GPU access, a Selkies remote desktop, and the
+  // shared Triton inference endpoint. See docs/spark/README.md.
   "dockerComposeFile": [
     "../../docker-compose.yml",
     "../../docker-compose.spark.yml",
@@ -16,6 +19,28 @@
   // Keeps the container running after VS Code disconnects, so you don't
   // lose your dev container between sessions.
   "shutdownAction": "none",
+
+  // Host side, before compose: checks HALO_DEV, builds the base image,
+  // creates the shared inference network.
+  "initializeCommand": "bash .devcontainer/spark/initialize.sh",
+
+  // Builds Perception + shell aliases (shared script), then the Spark-only
+  // display/VirtualGL bits.
+  "postCreateCommand": "bash /workspace/.devcontainer/spark/post-create.sh",
+
+  // Xvfb + openbox + Selkies + MAVLink TCP bridge, every (re)start.
+  "postStartCommand": "bash /usr/local/bin/start-desktop.sh",
+
+  // Both go through this developer's own Remote-SSH tunnel; nothing is
+  // published on the Spark itself. 8080: Selkies 2.x serves the page AND
+  // the video stream (WebSocket) on this one port. 5760: MAVLink as a TCP
+  // stream for QGroundControl on the laptop (QGC → Comm Links → TCP,
+  // localhost:5760). UDP can't be forwarded, which is why it's TCP.
+  "forwardPorts": [8080, 5760],
+  "portsAttributes": {
+    "8080": { "label": "Selkies desktop", "onAutoForward": "openBrowser" },
+    "5760": { "label": "MAVLink → QGroundControl (laptop)", "onAutoForward": "silent" }
+  },
 
   "customizations": {
     "vscode": {
@@ -34,10 +59,6 @@
       }
     }
   },
-
-  // Runs once after the container is created — builds the Perception
-  // package and sets up shell aliases, without launching Gazebo.
-  "postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
 
   "remoteUser": "root"
 }

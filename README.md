@@ -158,30 +158,12 @@ Earlier detectors are still in the package, selected by setting
 
 ## Running on the NVIDIA DGX Spark (ARM64)
 
-The base image and this repo's `Dockerfile` are multi-arch (amd64 + arm64),
-so the same `docker compose build` produces a native arm64 image on the
-Spark — no `--platform` flag needed, and the MAVSDK install step picks the
-matching arm64 release asset automatically.
+The Spark is a shared, headless host: each teammate connects from their
+laptop through plain SSH + VS Code Remote-SSH, opens their own clone, and
+"Reopen in Container" with the **PX4 SITL Dev Container (NVIDIA Spark)**
+profile. Gazebo streams to your browser (Selkies, GPU-encoded), QGroundControl
+runs on your laptop over a MAVLink-TCP bridge through the same SSH tunnel,
+and YOLO runs on one shared TensorRT engine behind NVIDIA Triton, so five
+people's sims don't each load their own model.
 
-The only thing that differs on the Spark is GPU/display forwarding, which
-`docker-compose.spark.yml` handles: real GPU passthrough via the NVIDIA
-Container Toolkit (Compose's device-reservation equivalent of
-`docker run --gpus`) plus plain X11, instead of the Windows/WSL2-only
-WSLg/D3D12 setup in `docker-compose.wsl.yml`.
-
-One-time setup on the Spark:
-
-1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-   and configure it for Docker: `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
-   Confirm it's picked up with `docker info | grep -i nvidia` (should list
-   `nvidia` under Runtimes).
-2. Allow Docker to connect to the local X server: `xhost +local:docker`.
-
-Then, from this folder on the Spark:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.spark.yml build
-docker compose -f docker-compose.yml -f docker-compose.spark.yml run --rm px4-sitl
-```
-
-From there, the workflow is the same as the "Running it" section above.
+Setup and day-to-day usage: [docs/spark/README.md](docs/spark/README.md).

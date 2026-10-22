@@ -1,0 +1,52 @@
+# Triton model config for the shared YOLOv8n person detector.
+# Schema: https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/model_configuration.html
+#
+# The engine itself (1/model.plan) is NOT committed — it is specific to the
+# GPU, driver and TensorRT build it was made with. Build it on the Spark
+# with ../../build_engine.sh.
+
+name: "yolo_person"
+platform: "tensorrt_plan"
+
+# Upper bound of frames merged into one GPU pass. Must match --maxShapes in
+# build_engine.sh. 8 leaves headroom above the 5 developer containers.
+max_batch_size: 8
+
+# Letterboxed 640x640 RGB, CHW, float32 in [0,1] — what Ultralytics feeds
+# the model. Tensor names are what Ultralytics' ONNX export produces.
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [ 3, 640, 640 ]
+  }
+]
+
+# [84, 8400]: 4 box coords (cx, cy, w, h) + 80 COCO class scores, for each
+# of the 8400 anchor positions. Decoded client-side (person = class 0).
+output [
+  {
+    name: "output0"
+    data_type: TYPE_FP32
+    dims: [ 84, 8400 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_GPU
+    count: 1
+  }
+]
+
+# This is the per-client-queue + batched-inference scheduler, in config
+# form. Requests from separate dev containers arriving within
+# max_queue_delay of each other are merged into one batch; a request never
+# waits longer than that for company. 10 ms is below the 15 Hz camera
+# period (66 ms) so it costs essentially nothing in latency, and the
+# preferred sizes cover "two or three people flying" without waiting for
+# all five. Re-tune from the perf_analyzer numbers in scripts/spark/verify.sh.
+dynamic_batching {
+  preferred_batch_size: [ 2, 4 ]
+  max_queue_delay_microseconds: 10000
+}
