@@ -161,8 +161,9 @@ Earlier detectors are still in the package, selected by setting
 The Spark is a shared, headless host: each teammate connects from their
 laptop through plain SSH + VS Code Remote-SSH, opens their own clone, and
 "Reopen in Container" with the **PX4 SITL Dev Container (NVIDIA Spark)**
-profile. Gazebo streams to your browser (Selkies, GPU-encoded) and YOLO runs
-on one shared TensorRT engine behind NVIDIA Triton, so five people's sims
-don't each load their own model.
+profile. Gazebo and QGroundControl stream to your browser (Selkies,
+GPU-encoded — QGC is started for you inside the container, since the sim's
+MAVLink never leaves it) and YOLO runs on one shared TensorRT engine behind
+NVIDIA Triton, so five people's sims don't each load their own model.
 
 Setup and day-to-day usage: [docs/spark/README.md](docs/spark/README.md).

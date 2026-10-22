@@ -14,6 +14,7 @@ VS Code ──Remote-SSH (ssh)───►  ~/devs/<you>/halo-linux  (your clone
    │                                   ▼
    │  port-forward 8080        halo-<you>-px4-sitl-1   ──┐
 browser ◄── Selkies (NVENC) ──  Xvfb + Gazebo (VirtualGL)│  bridge: halo-inference
+                                     + QGroundControl    │
                                 yolo_person_detector ────┼──► triton  (one TensorRT
                                                          │   engine, dynamic batching)
                                 halo-<other>-px4-sitl-1 ─┘
@@ -150,6 +151,16 @@ stops with *"HALO_DEV is not set"*, see section 4.
   `SELKIES_BASIC_AUTH_PASSWORD` from your `.env` (auto-generated on first
   open). Page and video both ride that one forwarded port (Selkies 2.x
   streams over a WebSocket), so there is nothing else to forward.
+- **QGroundControl is already open on that desktop.** It starts with the
+  container (`start-desktop.sh`, every (re)start) and is connected to PX4
+  as soon as `fly` is up — so step 1 of the README's "Running it" is done
+  for you, and `track`'s ROI updates land in it. Closed the window? `qgc`
+  brings it back (`qgc stop`, `qgc log` also exist). Its settings and map
+  cache live in a per-developer volume, so they survive a rebuild. A QGC on
+  your laptop can't be used instead: with bridge networking the sim's
+  MAVLink never leaves the container, and SSH can't forward UDP.
+- **`desktop`** re-runs the whole desktop bring-up (Xvfb, Selkies, QGC) in
+  place if something died; it's idempotent.
 - **`fly`, `perceive`, `track`, `spawn_person`** work as before. `fly` and
   `perceive` are wrapped in `vglrun -d egl` so Gazebo's OpenGL hits the
   NVIDIA GPU rather than Xvfb's software renderer. If you launch `gz sim`
@@ -167,19 +178,15 @@ stops with *"HALO_DEV is not set"*, see section 4.
   To free GPU memory when you're done for the day:
   `docker compose -p halo-<you> down`.
 
-## Known limitation
-
-With bridge networking, a QGroundControl on your laptop no longer receives
-MAVLink from the sim (it used to, via `network_mode: host` + WSLg). Not
-addressed in this change; the likely fix is running QGC inside the Selkies
-desktop.
-
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
 | `nvidia.com/gpu` device not found | `docker info \| grep -i cdi`, section 1 |
+| Selkies page spins forever / never loads | Nothing is listening on 8080 in *your* container. `desktop` in a container terminal (or `docker exec halo-<you>-px4-sitl-1 bash /usr/local/bin/start-desktop.sh` from the host). A forward made from a plain Remote-SSH window hits the Spark host, where nothing is published — it must be the window attached to the container |
 | Selkies page loads but stays black / "connecting" | `cat /tmp/desktop/selkies.log` — first line should say `encodes H264 ... on nvenc`; if not, `NVIDIA_DRIVER_CAPABILITIES`/CDI (section 1) |
+| QGroundControl window missing / closed | `qgc` (log: `/tmp/desktop/qgc.log`). "Second instance already running" → `qgc stop` then `qgc` |
+| QGroundControl shows no vehicle | Is `fly` running? PX4 sends to 127.0.0.1:14550 inside the container; `qgc log` for link errors |
 | Gazebo slow, `glxinfo -B` says llvmpipe | Run under `vglrun -d egl`; `vglrun -d egl glxinfo -B` should say NVIDIA |
 | Detector logs `skipped N (inference unavailable)` | `docker compose -f infra/triton/docker-compose.yml ps`; is the dev container on `halo-inference`? |
 | Someone else's drone in your sim | Your `.env` has the same `HALO_DEV` as theirs |

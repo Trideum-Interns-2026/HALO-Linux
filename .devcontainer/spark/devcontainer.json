@@ -28,7 +28,7 @@
   // display/VirtualGL bits.
   "postCreateCommand": "bash /workspace/.devcontainer/spark/post-create.sh",
 
-  // Xvfb + openbox + Selkies, every (re)start.
+  // Xvfb + openbox + Selkies + QGroundControl, every (re)start.
   "postStartCommand": "bash /usr/local/bin/start-desktop.sh",
 
   // Goes through this developer's own Remote-SSH tunnel; nothing is

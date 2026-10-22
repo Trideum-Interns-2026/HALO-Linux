@@ -9,7 +9,10 @@
 #   3. Selkies 2.x: streams that display to the browser, NVENC-encoded,
 #      over a plain WebSocket on one port — so it rides the developer's
 #      SSH port-forward directly (no WebRTC/TURN relay needed).
-#   4. The Triton Python client for the shared YOLO inference service.
+#   4. QGroundControl, running on that same desktop: with bridge networking
+#      a QGC on the laptop never sees the sim's MAVLink, so the ground
+#      station lives in here next to PX4 (autostarted by start-desktop.sh).
+#   5. The Triton Python client for the shared YOLO inference service.
 #
 # Built by docker-compose.spark.yml; BASE_IMAGE is the root Dockerfile's
 # output (halo-base:<dev>), built just before by initialize.sh.
@@ -70,6 +73,32 @@ RUN curl -fL -o /tmp/selkies.deb \
     && apt-get update && apt-get install -y --no-install-recommends /tmp/selkies.deb \
     && rm -f /tmp/selkies.deb && rm -rf /var/lib/apt/lists/*
 
+# QGroundControl. Stable releases ship an x86_64 and an aarch64 AppImage.
+# There's no FUSE in the container, so it's extracted here once (→
+# /opt/qgc, run via /opt/qgc/AppRun) instead of self-extracting into /tmp
+# on every launch (the extraction comes out root-only, hence the chmod).
+# QGC refuses to run as root, so /usr/local/bin/qgc starts it as `ubuntu`
+# (already in the base image; created if not) — its home is a compose
+# volume so QGC's settings and map cache persist.
+ARG QGC_VERSION=5.1.5
+RUN set -e \
+    && case "$TARGETARCH" in \
+        amd64) QGC_ARCH=x86_64 ;; \
+        arm64) QGC_ARCH=aarch64 ;; \
+        *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && cd /tmp \
+    && curl -fL -o qgc.AppImage \
+        "https://github.com/mavlink/qgroundcontrol/releases/download/v${QGC_VERSION}/QGroundControl-${QGC_ARCH}.AppImage" \
+    && chmod +x qgc.AppImage \
+    && ./qgc.AppImage --appimage-extract >/dev/null \
+    && mv squashfs-root /opt/qgc \
+    && chmod -R a+rX /opt/qgc \
+    && rm -f qgc.AppImage \
+    && (id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash ubuntu) \
+    && mkdir -p /home/ubuntu/.config /home/ubuntu/.cache \
+    && chown -R ubuntu:ubuntu /home/ubuntu
+
 # Triton gRPC client, from the SDK image's own aarch64/x86_64 wheel (see
 # the tritonsdk stage above). The SDK ships two wheels — a pure-Python
 # `py3-none-any` one and the `manylinux` platform one that carries the
@@ -85,7 +114,8 @@ RUN WHL="$(ls /tmp/tritonclient-*manylinux*.whl | head -n1)" \
 # Spark-only entry scripts. Kept outside /workspace so they work even
 # before the bind mount is up.
 COPY .devcontainer/spark/start-desktop.sh /usr/local/bin/start-desktop.sh
-RUN chmod +x /usr/local/bin/start-desktop.sh
+COPY .devcontainer/spark/qgc /usr/local/bin/qgc
+RUN chmod +x /usr/local/bin/start-desktop.sh /usr/local/bin/qgc
 
 ENV DISPLAY=:0
 WORKDIR /workspace

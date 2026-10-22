@@ -81,10 +81,10 @@ fi
 
 # ---------------------------------------------------------------------------
 if [[ " $SECTIONS " == *" stream "* ]]; then
-hdr "stream: Selkies processes + NVENC utilisation"
+hdr "stream: Selkies + QGroundControl processes, NVENC utilisation"
 c="$(dev_container)"
 if [ -z "$c" ]; then bad "no dev container running"; else
-    for p in Xvfb openbox 'bin/selkies( |$)'; do
+    for p in Xvfb openbox 'bin/selkies( |$)' 'qgc/AppRun|bin/QGroundControl'; do
         docker exec "$c" pgrep -f "$p" >/dev/null && ok "$p running" || bad "$p not running — docker exec $c cat /tmp/desktop/*.log"
     done
     echo "  Open the Selkies tab in a browser with Gazebo running, then watch 'enc' (NVENC %) — it must be > 0:"

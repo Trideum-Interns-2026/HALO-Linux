@@ -21,11 +21,16 @@ add_bashrc 'alias perceive="vglrun -d egl /workspace/Perception/scripts/run_perc
 # vglrun version above must come after it so it wins.
 sed -i '/^alias fly=.\/workspace\/scripts\/fly.$/d' /etc/bash.bashrc
 
+# Re-run the desktop bring-up by hand (idempotent) if Selkies or QGC died.
+add_bashrc 'alias desktop="bash /usr/local/bin/start-desktop.sh"'
+
 cat <<'EOF'
 
 Spark container ready.
   - Desktop:   VS Code → Ports tab → "Selkies desktop" (user = HALO_DEV,
                password = SELKIES_BASIC_AUTH_PASSWORD from your .env)
+               QGroundControl is already open there; `qgc` brings it back
+               if you close it, `desktop` restarts the whole desktop.
   - Inference: HALO_TRITON_URL=$HALO_TRITON_URL (shared Triton)
   - Run `fly` / `perceive` as usual; they're wrapped in vglrun for GPU GL.
 EOF

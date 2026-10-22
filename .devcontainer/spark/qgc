@@ -1,0 +1,51 @@
+#!/bin/bash
+# QGroundControl on the Selkies desktop.
+#
+# With bridge networking a QGC on your laptop never receives the sim's
+# MAVLink (and SSH can't forward UDP), so the ground station runs in here,
+# next to PX4, which sends its GCS stream to 127.0.0.1:14550 by default.
+# start-desktop.sh calls this on every container (re)start, so you normally
+# never run it by hand — it's here for after you close the window.
+#
+#   qgc          start it (or say it's already running)
+#   qgc stop     close it
+#   qgc log      follow its log
+#
+# QGC refuses to start as root, so it runs as the unprivileged `ubuntu`
+# user (uid 1000, present in the base image). HOME has to be set
+# explicitly — `su` without `-` keeps root's, and QGC can't write its
+# settings or map cache there. /home/ubuntu is a compose volume, so those
+# survive the container being recreated.
+set -u
+
+QGC_USER=ubuntu
+QGC_HOME=/home/$QGC_USER
+QGC_APP=/opt/qgc/AppRun          # AppImage extracted at build time (no FUSE here)
+LOG=/tmp/desktop/qgc.log
+export DISPLAY="${DISPLAY:-:0}"
+
+running() { pgrep -u "$QGC_USER" -x QGroundControl >/dev/null 2>&1; }
+
+case "${1:-start}" in
+    start) ;;
+    stop)  pkill -u "$QGC_USER" -x QGroundControl && echo "QGroundControl stopped"; exit 0 ;;
+    log)   exec tail -n 50 -f "$LOG" ;;
+    *)     echo "usage: qgc [start|stop|log]" >&2; exit 2 ;;
+esac
+
+if running; then
+    echo "QGroundControl is already running on $DISPLAY (qgc stop to close it)"
+    exit 0
+fi
+if [ ! -x "$QGC_APP" ]; then
+    echo "QGroundControl is not installed ($QGC_APP missing) — rebuild the Spark image" >&2
+    exit 1
+fi
+
+mkdir -p "$(dirname "$LOG")"
+# setsid: its own session, so whoever launched it (VS Code's
+# postStartCommand, your terminal) can exit without taking it along.
+setsid su "$QGC_USER" -s /bin/bash -c \
+    "export HOME=$QGC_HOME DISPLAY=$DISPLAY; cd $QGC_HOME && exec $QGC_APP" \
+    >"$LOG" 2>&1 </dev/null &
+echo "QGroundControl starting on $DISPLAY (qgc log to follow it)"
