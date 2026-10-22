@@ -26,12 +26,3 @@ ament_target_dependencies(main
     std_msgs
 )
 target_link_libraries(main Eigen3::Eigen MAVSDK::mavsdk)
-
-add_executable(track_and_center ${CMAKE_SOURCE_DIR}/Src/track_and_center.cpp)
-ament_target_dependencies(track_and_center
-    geometry_msgs
-    rclcpp
-    sensor_msgs
-    std_msgs
-)
-target_link_libraries(track_and_center MAVSDK::mavsdk)

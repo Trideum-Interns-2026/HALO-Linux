@@ -81,14 +81,17 @@ To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
 3. In another terminal, run `perceive`. It spawns the selected test target,
    starts the Gazebo camera bridge and detector, and opens the debug-image
    viewer. Leave it running while tracking.
-4. In a third terminal, run `track`. It builds and runs both C++ ROS nodes:
-   `main` runs the geographic target Kalman filter and publishes MAVLink
-   position/ROI updates, while `track_and_center` uses the camera bearing to
-   yaw the drone toward the detected target. The centering node waits for PX4
-   health checks, arms, and takes off using PX4's configured
-   `MIS_TAKEOFF_ALT` (2.5 meters by default in this SITL setup). Press Ctrl+C
-   in the `track` terminal to stop tracking and land; `fly` and `perceive`
-   remain running until stopped in their own terminals.
+4. In a third terminal, run `track`. It builds and runs `main`, which starts
+   the geographic Kalman tracker from
+   `Include/Tracking/target_kalman_filter.hpp` and the camera-based centering
+   node from `Include/Tracking/track_and_center.hpp` together. The Kalman
+   tracker publishes MAVLink position/ROI updates; the centering node uses
+   the camera bearing to yaw the drone toward the detected target. Arm and
+   take off the vehicle yourself before centering; `track` does not arm, take
+   off, or land. If `track` is already running, centering starts when PX4
+   reports the vehicle armed. If it is disarmed, centering stops until it is
+   armed again. Press Ctrl+C in the `track` terminal to stop tracking;
+   `fly` and `perceive` remain running until stopped in their own terminals.
 
 The default target is a red sphere. To track an unmarked person or a marked
 person, set the same target selection in the `perceive` and `track` terminals.
@@ -96,9 +99,10 @@ For example, run `PERCEIVE_TARGET=person perceive` and
 `PERCEIVE_TARGET=person track`. Use `PERCEIVE_TARGET=marked_person` for the
 person with the red chest marker.
 
-Automatic takeoff and tracking are intended for PX4/Gazebo SITL only; do not
-run them against a real vehicle. QGroundControl and the vehicle must be
-connected through MAVLink, and the tracking nodes use MAVSDK UDP `14540`.
+Tracking is intended for PX4/Gazebo SITL only; do not run it against a real
+vehicle. Arm and take off using QGroundControl or the PX4 SITL controls first.
+QGroundControl and the vehicle must be connected through MAVLink, and the
+tracking nodes use MAVSDK UDP `14540`.
 
 ### Docker resources
 
