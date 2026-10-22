@@ -21,7 +21,7 @@ QGC ◄───── MAVLink/TCP ───────  socat ◄─UDP─ PX4
 ```
 
 Sections 1–3 are **one-time host setup** (whoever administers the Spark).
-Sections 4–6 are **per developer**.
+Sections 4–7 are **per developer**.
 
 ---
 
@@ -151,19 +151,8 @@ stops with *"HALO_DEV is not set"*, see section 4.
   `SELKIES_BASIC_AUTH_PASSWORD` from your `.env` (auto-generated on first
   open). Page and video both ride that one forwarded port (Selkies 2.x
   streams over a WebSocket), so there is nothing else to forward.
-- **QGroundControl runs on your laptop**, with your own gamepad, same as
-  before — install it there if you haven't. What's different from WSL is
-  the link: the sim's MAVLink never leaves your container, and the SSH
-  tunnel only carries TCP, so QGC's usual UDP-14550 autoconnect finds
-  nothing. Instead your container bridges the stream to TCP on **5760**,
-  which VS Code forwards next to the Selkies port (*Ports* tab:
-  "MAVLink → QGroundControl"). Once, in QGC: *Application Settings → Comm
-  Links → Add* — type **TCP**, server address **localhost**, port **5760**,
-  tick *Automatically Connect on Start*, then *Connect*. After that it's
-  step 1 of the README's "Running it" as usual; the vehicle appears once
-  `fly` is up. Everyone uses the same `localhost:5760` on their own laptop
-  because each container has its own bridge and each tunnel is private —
-  nothing is published on the Spark. One QGC per container at a time.
+- **QGroundControl runs on your laptop**, with your own gamepad — over a
+  TCP link, not the usual UDP one. Setup in section 7.
 - **`desktop`** re-runs the whole bring-up (Xvfb, Selkies, MAVLink bridge)
   in place if something died; it's idempotent.
 - **`fly`, `perceive`, `track`, `spawn_person`** work as before. `fly` and
@@ -183,6 +172,61 @@ stops with *"HALO_DEV is not set"*, see section 4.
   To free GPU memory when you're done for the day:
   `docker compose -p halo-<you> down`.
 
+## 7. Developer: QGroundControl on your laptop
+
+QGC stays a native app on your laptop (that's where your gamepad is).
+What changes from the WSL setup is only the link: the sim's MAVLink never
+leaves your container, and the SSH tunnel VS Code uses carries TCP only,
+so QGC's default UDP-14550 autoconnect finds nothing. Your container
+therefore bridges PX4's ground-station stream to a **TCP** stream on
+**5760**, and VS Code forwards that port through your tunnel next to the
+Selkies one. Every developer uses the same `localhost:5760` on their own
+laptop — each container has its own bridge and each tunnel is private, so
+nothing is published on the Spark and nothing collides.
+
+### On your laptop, once
+
+1. Install [QGroundControl](https://qgroundcontrol.com/) — any current
+   version. If you drive VS Code from WSL2, install QGC on **Windows**
+   itself, not inside WSL.
+2. Open QGC → **Application Settings → Comm Links → Add**.
+3. Fill in the link and save it:
+
+   | Field | Value |
+   |---|---|
+   | Name | `Spark` |
+   | Type | **TCP** |
+   | Server Address | `localhost` |
+   | Port | `5760` |
+   | Automatically Connect on Start | ✔ |
+
+4. Gamepad: plug it in and set it up under **Vehicle Setup → Joystick**
+   after the first connection. It's local to your laptop; nothing else is
+   needed.
+
+### Every session
+
+1. Connect VS Code to the Spark and reopen your clone in the Spark dev
+   container (section 5). The container's start script brings the MAVLink
+   bridge up by itself.
+2. Check the *Ports* tab: you should see **Selkies desktop** (8080) and
+   **MAVLink → QGroundControl (laptop)** (5760). The second one must be
+   there for QGC to connect.
+3. Open QGC. With auto-connect ticked it attaches to the link straight
+   away, and says *Disconnected* until the sim is running — that's normal.
+4. In a container terminal run `fly`. Once PX4 is up the vehicle appears
+   in QGC; `perceive` and `track` follow as before.
+
+### If it doesn't connect
+
+- The link type must be **TCP**. A UDP link can't see the vehicle here.
+- 5760 missing from the *Ports* tab → `desktop` in a container terminal
+  restarts the bridge, or add the forward by hand (*Ports → Forward a Port*).
+- Vehicle never appears → is `fly` running? Inside the container:
+  `cat /tmp/desktop/mavlink-bridge.log`.
+- Only one QGC can be attached to a container at a time. A teammate needs
+  their own container (own clone + `HALO_DEV`), not a second link to yours.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -190,7 +234,7 @@ stops with *"HALO_DEV is not set"*, see section 4.
 | `nvidia.com/gpu` device not found | `docker info \| grep -i cdi`, section 1 |
 | Selkies page spins forever / never loads | Nothing is listening on 8080 in *your* container. `desktop` in a container terminal (or `docker exec halo-<you>-px4-sitl-1 bash /usr/local/bin/start-desktop.sh` from the host). A forward made from a plain Remote-SSH window hits the Spark host, where nothing is published — it must be the window attached to the container |
 | Selkies page loads but stays black / "connecting" | `cat /tmp/desktop/selkies.log` — first line should say `encodes H264 ... on nvenc`; if not, `NVIDIA_DRIVER_CAPABILITIES`/CDI (section 1) |
-| QGroundControl says *Disconnected* / no vehicle | Link must be **TCP** `localhost:5760`, not UDP (section 6). 5760 in the *Ports* tab? `fly` running? `cat /tmp/desktop/mavlink-bridge.log` in the container; `desktop` restarts the bridge |
+| QGroundControl says *Disconnected* / no vehicle | Section 7: link must be **TCP** `localhost:5760`, 5760 in the *Ports* tab, `fly` running; `cat /tmp/desktop/mavlink-bridge.log` in the container; `desktop` restarts the bridge |
 | QGC connects but a second person's QGC can't | Each container serves one QGC at a time; they need their own container (own clone + `HALO_DEV`), not yours |
 | Gazebo slow, `glxinfo -B` says llvmpipe | Run under `vglrun -d egl`; `vglrun -d egl glxinfo -B` should say NVIDIA |
 | Detector logs `skipped N (inference unavailable)` | `docker compose -f infra/triton/docker-compose.yml ps`; is the dev container on `halo-inference`? |
