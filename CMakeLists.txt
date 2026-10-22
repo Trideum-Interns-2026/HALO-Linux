@@ -26,3 +26,12 @@ ament_target_dependencies(main
     std_msgs
 )
 target_link_libraries(main Eigen3::Eigen MAVSDK::mavsdk)
+
+add_executable(movement ${CMAKE_SOURCE_DIR}/Movement/follow_target.cpp)
+ament_target_dependencies(movement
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    std_msgs
+)
+target_link_libraries(movement MAVSDK::mavsdk)

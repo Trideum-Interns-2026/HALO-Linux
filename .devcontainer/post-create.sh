@@ -51,3 +51,5 @@ grep -q "alias perceive=" /etc/bash.bashrc || \
     echo "alias perceive='/workspace/Perception/scripts/run_perception_demo.sh'" >> /etc/bash.bashrc
 grep -q "alias track=" /etc/bash.bashrc || \
     echo "alias track='/workspace/scripts/track'" >> /etc/bash.bashrc
+grep -q "alias move=" /etc/bash.bashrc || \
+    echo "alias move='bash /workspace/scripts/move'" >> /etc/bash.bashrc

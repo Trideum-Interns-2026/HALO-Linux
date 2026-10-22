@@ -156,6 +156,22 @@ Earlier detectors are still in the package, selected by setting
 - `PERCEIVE_TARGET=sphere` — red test sphere on its own
   (`red_sphere_detector.py`)
 
+## Movement
+
+`Movement/follow_target.cpp` adds an opt-in movement controller. After starting
+PX4/Gazebo and `perceive`, run `move` in another container terminal. It uses
+the detector's pixel position to steer laterally and estimated distance to
+approach at a bounded speed, stopping forward motion at the configured
+following distance. It does not arm or take off; the vehicle must already be
+armed and airborne. If target messages become stale, the node stops offboard
+control.
+
+The default target is the red sphere. To follow an unmarked person, set
+`PERCEIVE_TARGET=person` in both the `perceive` and `move` terminals. The
+`marked_person` target uses the red-sphere detector, so no special movement
+setting is needed. See `Movement/README.md` for controller parameters and
+limits. Test in simulation before any real vehicle use.
+
 ## Running on the NVIDIA DGX Spark (ARM64)
 
 The base image and this repo's `Dockerfile` are multi-arch (amd64 + arm64),
