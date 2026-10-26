@@ -84,7 +84,7 @@ if [[ " $SECTIONS " == *" stream "* ]]; then
 hdr "stream: Selkies + MAVLink bridge processes, NVENC utilisation"
 c="$(dev_container)"
 if [ -z "$c" ]; then bad "no dev container running"; else
-    for p in Xvfb openbox 'bin/selkies( |$)' 'socat.*TCP4-LISTEN'; do
+    for p in Xvfb openbox 'bin/selkies( |$)' 'mavlink-tcp-bridge'; do
         docker exec "$c" pgrep -f "$p" >/dev/null && ok "$p running" || bad "$p not running — docker exec $c cat /tmp/desktop/*.log"
     done
     echo "  Open the Selkies tab in a browser with Gazebo running, then watch 'enc' (NVENC %) — it must be > 0:"

@@ -9,7 +9,7 @@
 #   3. Selkies 2.x: streams that display to the browser, NVENC-encoded,
 #      over a plain WebSocket on one port — so it rides the developer's
 #      SSH port-forward directly (no WebRTC/TURN relay needed).
-#   4. A MAVLink-over-TCP bridge (socat) so QGroundControl on the
+#   4. A MAVLink-over-TCP bridge (mavlink-tcp-bridge) so QGroundControl on the
 #      developer's laptop — with their gamepad — reaches PX4 through the
 #      same SSH tunnel: UDP can't cross a VS Code/SSH port forward, TCP can.
 #   5. The Triton Python client for the shared YOLO inference service.
@@ -89,7 +89,8 @@ RUN WHL="$(ls /tmp/tritonclient-*manylinux*.whl | head -n1)" \
 # Spark-only entry scripts. Kept outside /workspace so they work even
 # before the bind mount is up.
 COPY .devcontainer/spark/start-desktop.sh /usr/local/bin/start-desktop.sh
-RUN chmod +x /usr/local/bin/start-desktop.sh
+COPY .devcontainer/spark/mavlink-tcp-bridge.py /usr/local/bin/mavlink-tcp-bridge
+RUN chmod +x /usr/local/bin/start-desktop.sh /usr/local/bin/mavlink-tcp-bridge
 
 ENV DISPLAY=:0
 WORKDIR /workspace

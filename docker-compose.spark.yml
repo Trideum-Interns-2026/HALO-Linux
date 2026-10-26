@@ -95,7 +95,7 @@ services:
       - SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_BASIC_AUTH_PASSWORD:?run .devcontainer/spark/initialize.sh}
       # --- MAVLink bridge for QGroundControl on the laptop ---------------
       # PX4 SITL sends its GCS stream to 127.0.0.1:14550 inside the
-      # container; socat re-serves it as a TCP stream here. Every developer
+      # container; mavlink-tcp-bridge re-serves it as a TCP stream here. Every developer
       # gets the same port because every container has its own bridge and
       # its own tunnel — nothing is published on the Spark.
       - MAVLINK_TCP_PORT=5760

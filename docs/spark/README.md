@@ -14,7 +14,7 @@ VS Code ──Remote-SSH (ssh)───►  ~/devs/<you>/halo-linux  (your clone
    │                                   ▼
    │  port-forward 8080, 5760  halo-<you>-px4-sitl-1   ──┐
 browser ◄── Selkies (NVENC) ──  Xvfb + Gazebo (VirtualGL)│  bridge: halo-inference
-QGC ◄───── MAVLink/TCP ───────  socat ◄─UDP─ PX4 SITL    │
+QGC ◄───── MAVLink/TCP ───────  bridge ◄─UDP─ PX4 SITL   │
                                 yolo_person_detector ────┼──► triton  (one TensorRT
                                                          │   engine, dynamic batching)
                                 halo-<other>-px4-sitl-1 ─┘
@@ -180,7 +180,7 @@ leaves your container, and the SSH tunnel VS Code uses carries TCP only,
 so QGC's default UDP-14550 autoconnect finds nothing. Your container
 therefore bridges PX4's ground-station stream to a **TCP** stream on
 **5760**, and VS Code forwards that port through your tunnel next to the
-Selkies one. Every developer uses the same `localhost:5760` on their own
+Selkies one. Every developer uses the same `127.0.0.1:5760` on their own
 laptop — each container has its own bridge and each tunnel is private, so
 nothing is published on the Spark and nothing collides.
 
@@ -196,7 +196,7 @@ nothing is published on the Spark and nothing collides.
    |---|---|
    | Name | `Spark` |
    | Type | **TCP** |
-   | Server Address | `localhost` |
+   | Server Address | `127.0.0.1` (not `localhost`, which can resolve to IPv6 and miss VS Code's forward) |
    | Port | `5760` |
    | Automatically Connect on Start | ✔ |
 
@@ -224,8 +224,16 @@ nothing is published on the Spark and nothing collides.
   restarts the bridge, or add the forward by hand (*Ports → Forward a Port*).
 - Vehicle never appears → is `fly` running? Inside the container:
   `cat /tmp/desktop/mavlink-bridge.log`.
-- Only one QGC can be attached to a container at a time. A teammate needs
-  their own container (own clone + `HALO_DEV`), not a second link to yours.
+- Server address must be `127.0.0.1`. If you typed `localhost`, edit the
+  link: on Windows it can resolve to IPv6 and miss the forward.
+- The *Ports* tab may show 5760 mapped to a different local port if 5760
+  was taken on your laptop. Use the local port it shows.
+- The bridge logs each connection: inside the container,
+  `cat /tmp/desktop/mavlink-bridge.log`. No "client connected" line when
+  QGC tries means the forward isn't reaching the container; "connected"
+  but no vehicle means PX4 isn't running (`fly`).
+- Several QGCs can attach to one container at once (they all see the same
+  vehicle). Teammates still want their own container for their own sim.
 
 ## Troubleshooting
 
@@ -234,8 +242,7 @@ nothing is published on the Spark and nothing collides.
 | `nvidia.com/gpu` device not found | `docker info \| grep -i cdi`, section 1 |
 | Selkies page spins forever / never loads | Nothing is listening on 8080 in *your* container. `desktop` in a container terminal (or `docker exec halo-<you>-px4-sitl-1 bash /usr/local/bin/start-desktop.sh` from the host). A forward made from a plain Remote-SSH window hits the Spark host, where nothing is published — it must be the window attached to the container |
 | Selkies page loads but stays black / "connecting" | `cat /tmp/desktop/selkies.log` — first line should say `encodes H264 ... on nvenc`; if not, `NVIDIA_DRIVER_CAPABILITIES`/CDI (section 1) |
-| QGroundControl says *Disconnected* / no vehicle | Section 7: link must be **TCP** `localhost:5760`, 5760 in the *Ports* tab, `fly` running; `cat /tmp/desktop/mavlink-bridge.log` in the container; `desktop` restarts the bridge |
-| QGC connects but a second person's QGC can't | Each container serves one QGC at a time; they need their own container (own clone + `HALO_DEV`), not yours |
+| QGroundControl says *Disconnected* / no vehicle | Section 7: link must be **TCP** `127.0.0.1:5760`, 5760 in the *Ports* tab, `fly` running; `cat /tmp/desktop/mavlink-bridge.log` in the container; `desktop` restarts the bridge |
 | Gazebo slow, `glxinfo -B` says llvmpipe | Run under `vglrun -d egl`; `vglrun -d egl glxinfo -B` should say NVIDIA |
 | Detector logs `skipped N (inference unavailable)` | `docker compose -f infra/triton/docker-compose.yml ps`; is the dev container on `halo-inference`? |
 | Someone else's drone in your sim | Your `.env` has the same `HALO_DEV` as theirs |

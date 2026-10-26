@@ -31,7 +31,7 @@ Spark container ready.
   - Desktop:   VS Code → Ports tab → "Selkies desktop" (user = HALO_DEV,
                password = SELKIES_BASIC_AUTH_PASSWORD from your .env)
                `desktop` restarts it (and the MAVLink bridge) if needed.
-  - QGC:       on YOUR LAPTOP — Comm Links → TCP → localhost:5760
+  - QGC:       on YOUR LAPTOP — Comm Links → TCP → 127.0.0.1:5760
                (forwarded by VS Code like the desktop; see docs/spark).
   - Inference: HALO_TRITON_URL=$HALO_TRITON_URL (shared Triton)
   - Run `fly` / `perceive` as usual; they're wrapped in vglrun for GPU GL.

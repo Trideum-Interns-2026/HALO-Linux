@@ -6,7 +6,7 @@
 # anything died.
 #
 #   Xvfb :0  ──►  openbox  ──►  selkies (WebSocket on :8080)
-#   PX4 ──UDP 14550──►  socat  ──TCP 5760──►  (VS Code forward)  ──►  QGC on the laptop
+#   PX4 ──UDP 14550──►  mavlink-tcp-bridge  ──TCP 5760──►  (VS Code forward)  ──►  QGC on the laptop
 #
 # Every daemon is started under setsid, in its own session. VS Code tears
 # down postStartCommand's process group as soon as this script returns,
@@ -86,33 +86,22 @@ fi
 
 # --- 4. MAVLink bridge for QGroundControl on the laptop ---------------------
 # With bridge networking the sim's MAVLink never leaves this container, and
-# a VS Code/SSH port forward only carries TCP — so a QGC on the laptop can't
-# just listen on UDP 14550 like it does on WSL. Instead, socat takes the
-# GCS stream PX4 sends to 127.0.0.1:14550 (from its port 18570; see
-# /opt/px4-gazebo/etc/init.d-posix/px4-rc.mavlink) and re-serves it as a
-# TCP stream on MAVLINK_TCP_PORT, which VS Code forwards alongside Selkies'
-# port. QGC: Comm Links → TCP → localhost:5760 (one QGC per container).
-# Bytes QGC sends go back out the same UDP socket to PX4's 18570.
+# a VS Code/SSH port forward only carries TCP, so a QGC on the laptop can't
+# just listen on UDP 14550 like it does on WSL. mavlink-tcp-bridge owns UDP
+# 127.0.0.1:14550 (where PX4 SITL sends its GCS stream) and serves it as TCP
+# on MAVLINK_TCP_PORT, which VS Code forwards next to Selkies' port.
+# QGC: Comm Links -> TCP -> 127.0.0.1:5760. See the script for why it isn't
+# socat (IPv6 refusals; only the first connection ever got data).
 #
-# sourceport=18570 pins the UDP side to PX4: anything else that talks to
-# 14550 inside the container (`track`'s ROI messages, say) is ignored
-# rather than becoming the peer QGC's commands get sent to. MAVLink is
-# self-framing, so the TCP stream needs no extra packetisation. The
-# explicit *4-LISTEN forms matter: socat 1.8's plain UDP-LISTEN refuses to
-# start ("unknown address family 0").
-#
-# Supervised: socat has been seen missing after container start with
-# nothing in its log, and a bridge that is silently down looks to the
-# developer exactly like "QGC won't connect". The loop restarts it and
-# timestamps every exit in the log.
-if ! pgrep -f "socat.*TCP4-LISTEN:${MAVLINK_TCP_PORT}" >/dev/null 2>&1; then
+# Supervised: a bridge that is silently down looks to the developer exactly
+# like "QGC won't connect", so the loop restarts it and logs every exit.
+if ! pgrep -f "mavlink-tcp-bridge" >/dev/null 2>&1; then
     daemon mavlink-bridge bash -c '
         while true; do
-            socat -d "TCP4-LISTEN:$0,reuseaddr,fork" \
-                      "UDP4-LISTEN:14550,reuseaddr,sourceport=18570"
-            echo "$(date -Is) socat exited (rc=$?), restarting in 1 s" >&2
+            python3 -u /usr/local/bin/mavlink-tcp-bridge
+            echo "$(date -Is) bridge exited (rc=$?), restarting in 1 s"
             sleep 1
-        done' "${MAVLINK_TCP_PORT}"
+        done'
 fi
 
 echo "desktop up: Xvfb ${DISPLAY}, Selkies on :${PORT}, MAVLink→QGC on tcp:${MAVLINK_TCP_PORT} (logs in $LOG)"
