@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -Ee -o pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source /opt/ros/jazzy/setup.bash
+if [[ -f /opt/ros2_ws/install/setup.bash ]]; then
+    source /opt/ros2_ws/install/setup.bash
+fi
+set -u
+
+# Track launcher process trees so nested ROS jobs are shut down too.
+set -m
+job_pids=()
+shutdown_pids=()
+
+collect_descendants() {
+    local parent=$1 child
+    while read -r child; do
+        [[ -n "$child" ]] || continue
+        collect_descendants "$child"
+        shutdown_pids+=("$child")
+    done < <(ps -o pid= --ppid "$parent")
+}
+
+is_running() {
+    local state
+    state="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+    [[ -n "$state" && "$state" != Z* ]]
+}
+
+cleanup() {
+    local status=$?
+    trap - EXIT INT TERM
+
+    if ((${#job_pids[@]})); then
+        echo "Stopping demo processes (tracking will attempt to land)..."
+    fi
+    for pid in "${job_pids[@]}"; do
+        collect_descendants "$pid"
+        shutdown_pids+=("$pid")
+    done
+    for pid in "${shutdown_pids[@]}"; do
+        kill -INT "$pid" 2>/dev/null || true
+    done
+
+    # Allow ROS nodes and the tracker time to shut down and land.
+    for _ in {1..70}; do
+        local running=false
+        for pid in "${shutdown_pids[@]}"; do
+            if is_running "$pid"; then
+                running=true
+            fi
+        done
+        [[ "$running" == true ]] || break
+        sleep 1
+    done
+
+    for signal in TERM KILL; do
+        for pid in "${shutdown_pids[@]}"; do
+            if is_running "$pid"; then
+                kill "-$signal" "$pid" 2>/dev/null || true
+            fi
+        done
+        [[ "$signal" == KILL ]] || sleep 5
+    done
+    for pid in "${job_pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+"$repo/scripts/fly" &
+job_pids+=("$!")
+echo "Waiting for Gazebo..."
+while ! gz service -l 2>/dev/null | grep -Fxq /world/default/create; do
+    if ! kill -0 "${job_pids[0]}" 2>/dev/null; then
+        echo "Gazebo launcher exited before the world became ready." >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "Starting perception..."
+"$repo/Perception/scripts/run_perception_demo.sh" "$@" &
+job_pids+=("$!")
+until ros2 topic list 2>/dev/null | grep -Fxq /yolo_person_detector/person/position; do
+    if ! kill -0 "${job_pids[1]}" 2>/dev/null; then
+        echo "Perception launcher exited before the person topic became available." >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "Starting tracking. Press Ctrl+C to stop and land."
+"$repo/scripts/track" &
+job_pids+=("$!")
+wait "${job_pids[2]}"
