@@ -11,7 +11,7 @@ script_path="$(readlink -f "${BASH_SOURCE[0]}")"
 repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 build_dir="${repo_dir}/build"
 
-target="${PERCEIVE_TARGET:-sphere}"
+target="${PERCEIVE_TARGET:-yolo_person}"
 case "$target" in
     sphere|marked_person)
         position_topic=/red_sphere_detector/red_sphere/position
@@ -21,8 +21,12 @@ case "$target" in
         position_topic=/person_detector/person/position
         distance_topic=/person_detector/person/distance
         ;;
+    yolo_person)
+        position_topic=/yolo_person_detector/person/position
+        distance_topic=/yolo_person_detector/person/distance
+        ;;
     *)
-        echo "Unsupported PERCEIVE_TARGET '$target' (use sphere, person, or marked_person)." >&2
+        echo "Unsupported PERCEIVE_TARGET '$target' (use yolo_person, person, marked_person, or sphere)." >&2
         exit 2
         ;;
 esac
@@ -30,8 +34,8 @@ esac
 cmake -S "$repo_dir" -B "$build_dir"
 cmake --build "$build_dir" --target main
 
-echo "Starting Kalman target tracking and camera-based centering for ${target}."
-echo "Press Ctrl+C here to stop tracking and land; fly and perceive remain running."
+echo "Starting Kalman target tracking for ${target}."
+echo "Press Ctrl+C here to stop tracking; fly and perceive remain running."
 exec "$build_dir/main" --ros-args \
     -p position_topic:="$position_topic" \
     -p distance_topic:="$distance_topic" \
