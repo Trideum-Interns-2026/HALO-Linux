@@ -75,7 +75,8 @@ To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
 
 ## Running it
 
-1. Open QGroundControl.
+1. Open QGroundControl. On the DGX Spark, connect it over TCP first; see
+   [Connecting QGroundControl on the Spark](#connecting-qgroundcontrol-on-the-spark).
 2. In a terminal in the Dev Container, run `fly`. It starts PX4 SITL and
    Gazebo only; leave it running.
 3. In another terminal, run `perceive`. It spawns the selected test target,
@@ -122,7 +123,8 @@ you have confirmed it is safe to remove.
 
 ## Running it
 
-1. Open QGroundControl
+1. Open QGroundControl (on the Spark: see
+   [Connecting QGroundControl on the Spark](#connecting-qgroundcontrol-on-the-spark))
 2. `fly` — launches PX4 SITL and Gazebo.
 3. In a new terminal, `perceive` — spawns the person, starts the camera
    bridge and the YOLO detector, and opens the viewer window with the
@@ -158,30 +160,43 @@ Earlier detectors are still in the package, selected by setting
 
 ## Running on the NVIDIA DGX Spark (ARM64)
 
-The base image and this repo's `Dockerfile` are multi-arch (amd64 + arm64),
-so the same `docker compose build` produces a native arm64 image on the
-Spark — no `--platform` flag needed, and the MAVSDK install step picks the
-matching arm64 release asset automatically.
+The Spark is a shared, headless host: each teammate connects from their
+laptop through plain SSH + VS Code Remote-SSH, opens their own clone, and
+"Reopen in Container" with the **PX4 SITL Dev Container (NVIDIA Spark)**
+profile. Gazebo streams to your browser (Selkies, GPU-encoded), QGroundControl
+runs on your laptop over a MAVLink-TCP bridge through the same SSH tunnel,
+and YOLO runs on one shared TensorRT engine behind NVIDIA Triton, so five
+people's sims don't each load their own model.
 
-The only thing that differs on the Spark is GPU/display forwarding, which
-`docker-compose.spark.yml` handles: real GPU passthrough via the NVIDIA
-Container Toolkit (Compose's device-reservation equivalent of
-`docker run --gpus`) plus plain X11, instead of the Windows/WSL2-only
-WSLg/D3D12 setup in `docker-compose.wsl.yml`.
+Setup and day-to-day usage: [docs/spark/README.md](docs/spark/README.md).
 
-One-time setup on the Spark:
+### Connecting QGroundControl on the Spark
 
-1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-   and configure it for Docker: `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`.
-   Confirm it's picked up with `docker info | grep -i nvidia` (should list
-   `nvidia` under Runtimes).
-2. Allow Docker to connect to the local X server: `xhost +local:docker`.
+QGroundControl runs on your laptop, not in the container, so your gamepad
+works as usual. The link is different from WSL: the sim's MAVLink stays
+inside your container, and the SSH tunnel only carries TCP. The container
+serves it as a TCP stream on port 5760, and VS Code forwards that port to
+your laptop.
 
-Then, from this folder on the Spark:
+Once, in QGroundControl on your laptop:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.spark.yml build
-docker compose -f docker-compose.yml -f docker-compose.spark.yml run --rm px4-sitl
-```
+1. Open **Application Settings → Comm Links → Add**.
+2. Set **Type** to `TCP`, **Server Address** to `127.0.0.1`, and **Port**
+   to `5760`. Use `127.0.0.1`, not `localhost`, which can resolve to IPv6
+   and miss the forward.
+3. Tick **Automatically Connect on Start** and save.
 
-From there, the workflow is the same as the "Running it" section above.
+Every session:
+
+1. Reopen your clone in the Spark dev container.
+2. In VS Code's **Ports** tab, check that 5760 "MAVLink → QGroundControl
+   (laptop)" is listed. If VS Code mapped it to a different local port,
+   use that port in QGroundControl.
+3. Open QGroundControl, then run `fly` in a container terminal. The
+   vehicle appears once PX4 is up.
+
+If it doesn't connect, run `cat /tmp/desktop/mavlink-bridge.log` in the
+container. A "client connected" line means QGroundControl reached the
+container. No such line means the forward or the link settings are wrong.
+`desktop` restarts the bridge. Full details and troubleshooting are in
+[section 7 of the Spark guide](docs/spark/README.md#7-developer-qgroundcontrol-on-your-laptop).
