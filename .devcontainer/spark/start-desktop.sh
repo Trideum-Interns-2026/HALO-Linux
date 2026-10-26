@@ -34,9 +34,22 @@ PORT="${SELKIES_PORT:-8080}"
 MAVLINK_TCP_PORT="${MAVLINK_TCP_PORT:-5760}"
 
 # daemon <log name> <command...>: detached, logging to $LOG/<name>.log
+#
+# Waits until the child is in its own session before returning. VS Code
+# kills postStartCommand's process group the moment this script exits, and
+# between `&` forking and setsid() running the child is still in that
+# group. Without the wait, whichever daemon starts last (the MAVLink
+# bridge) was killed every time, leaving an empty log behind.
 daemon() {
     local name=$1; shift
     setsid "$@" >"$LOG/$name.log" 2>&1 </dev/null &
+    local pid=$! sid
+    for _ in $(seq 1 100); do
+        sid=$(ps -o sid= -p "$pid" 2>/dev/null | tr -d ' ')
+        [ -z "$sid" ] && break                 # already exited; its log says why
+        [ "$sid" = "$pid" ] && break           # setsid() done: out of our group
+        sleep 0.01
+    done
 }
 
 # --- 1. Virtual X server --------------------------------------------------
