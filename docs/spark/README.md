@@ -222,8 +222,6 @@ nothing is published on the Spark and nothing collides.
 - The link type must be **TCP**. A UDP link can't see the vehicle here.
 - 5760 missing from the *Ports* tab → `desktop` in a container terminal
   restarts the bridge, or add the forward by hand (*Ports → Forward a Port*).
-- Vehicle never appears → is `fly` running? Inside the container:
-  `cat /tmp/desktop/mavlink-bridge.log`.
 - Server address must be `127.0.0.1`. If you typed `localhost`, edit the
   link: on Windows it can resolve to IPv6 and miss the forward.
 - The *Ports* tab may show 5760 mapped to a different local port if 5760

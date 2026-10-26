@@ -75,7 +75,8 @@ To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
 
 ## Running it
 
-1. Open QGroundControl.
+1. Open QGroundControl. On the DGX Spark, connect it over TCP first; see
+   [Connecting QGroundControl on the Spark](#connecting-qgroundcontrol-on-the-spark).
 2. In a terminal in the Dev Container, run `fly`. It starts PX4 SITL and
    Gazebo only; leave it running.
 3. In another terminal, run `perceive`. It spawns the selected test target,
@@ -122,7 +123,8 @@ you have confirmed it is safe to remove.
 
 ## Running it
 
-1. Open QGroundControl
+1. Open QGroundControl (on the Spark: see
+   [Connecting QGroundControl on the Spark](#connecting-qgroundcontrol-on-the-spark))
 2. `fly` — launches PX4 SITL and Gazebo.
 3. In a new terminal, `perceive` — spawns the person, starts the camera
    bridge and the YOLO detector, and opens the viewer window with the
@@ -167,3 +169,34 @@ and YOLO runs on one shared TensorRT engine behind NVIDIA Triton, so five
 people's sims don't each load their own model.
 
 Setup and day-to-day usage: [docs/spark/README.md](docs/spark/README.md).
+
+### Connecting QGroundControl on the Spark
+
+QGroundControl runs on your laptop, not in the container, so your gamepad
+works as usual. The link is different from WSL: the sim's MAVLink stays
+inside your container, and the SSH tunnel only carries TCP. The container
+serves it as a TCP stream on port 5760, and VS Code forwards that port to
+your laptop.
+
+Once, in QGroundControl on your laptop:
+
+1. Open **Application Settings → Comm Links → Add**.
+2. Set **Type** to `TCP`, **Server Address** to `127.0.0.1`, and **Port**
+   to `5760`. Use `127.0.0.1`, not `localhost`, which can resolve to IPv6
+   and miss the forward.
+3. Tick **Automatically Connect on Start** and save.
+
+Every session:
+
+1. Reopen your clone in the Spark dev container.
+2. In VS Code's **Ports** tab, check that 5760 "MAVLink → QGroundControl
+   (laptop)" is listed. If VS Code mapped it to a different local port,
+   use that port in QGroundControl.
+3. Open QGroundControl, then run `fly` in a container terminal. The
+   vehicle appears once PX4 is up.
+
+If it doesn't connect, run `cat /tmp/desktop/mavlink-bridge.log` in the
+container. A "client connected" line means QGroundControl reached the
+container. No such line means the forward or the link settings are wrong.
+`desktop` restarts the bridge. Full details and troubleshooting are in
+[section 7 of the Spark guide](docs/spark/README.md#7-developer-qgroundcontrol-on-your-laptop).
