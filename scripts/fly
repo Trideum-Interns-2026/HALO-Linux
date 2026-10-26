@@ -50,5 +50,5 @@ if [[ "$service_ready" != true ]]; then
     exit 1
 fi
 
-echo "PX4/Gazebo is ready. Start 'perceive' and then 'track' in separate terminals."
+echo "PX4/Gazebo is ready."
 wait "$sim_pid"
