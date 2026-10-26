@@ -7,15 +7,17 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/point_stamped.hpp>
+#include <mavsdk/mavsdk.h>
+#include <mavsdk/plugins/telemetry/telemetry.h>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/float32.hpp>
-#include <std_msgs/msg/float64.hpp>
 
 #include "Groundstation/mavlink_interface.hpp"
 
@@ -28,39 +30,26 @@ public:
           process_noise_(Eigen::Matrix4d::Identity() * 0.05),
           measurement_noise_(Eigen::Matrix2d::Identity() * 0.09),
           last_measurement_time_(this->now()) {
-        declare_parameter("position_topic", "/red_sphere_detector/red_sphere/position");
-        declare_parameter("distance_topic", "/red_sphere_detector/red_sphere/distance");
+        declare_parameter("position_topic", "/yolo_person_detector/person/position");
+        declare_parameter("distance_topic", "/yolo_person_detector/person/distance");
         declare_parameter("camera_info_topic", "/camera/front/camera_info");
         declare_parameter("mavlink_endpoint", "127.0.0.1");
         declare_parameter("mavlink_port", 14550);
-        declare_parameter("vehicle_position_topic", "/vehicle/position");
-        declare_parameter("vehicle_heading_topic", "/vehicle/heading_deg");
+        declare_parameter("mavsdk_connection_url", "udpin://0.0.0.0:14540");
         declare_parameter("roi_period_ms", 200);
-        declare_parameter("vehicle_latitude", 0.0);
-        declare_parameter("vehicle_longitude", 0.0);
-        declare_parameter("vehicle_altitude_m", 0.0);
-        declare_parameter("vehicle_heading_deg", 0.0);
         declare_parameter("camera_yaw_offset_deg", 0.0);
         declare_parameter("camera_pitch_offset_deg", 0.0);
         declare_parameter("target_system_id", 2);
         declare_parameter("target_component_id", 1);
 
-        vehicle_latitude_ = get_parameter("vehicle_latitude").as_double();
-        vehicle_longitude_ = get_parameter("vehicle_longitude").as_double();
-        vehicle_altitude_m_ = get_parameter("vehicle_altitude_m").as_double();
-        vehicle_heading_deg_ = get_parameter("vehicle_heading_deg").as_double();
-
         const auto position_topic = get_parameter("position_topic").as_string();
         const auto distance_topic = get_parameter("distance_topic").as_string();
         const auto camera_info_topic = get_parameter("camera_info_topic").as_string();
-        const auto vehicle_position_topic =
-            get_parameter("vehicle_position_topic").as_string();
-        const auto vehicle_heading_topic =
-            get_parameter("vehicle_heading_topic").as_string();
 
         sender_ = std::make_unique<MavlinkSender>(
             get_parameter("mavlink_endpoint").as_string(),
             get_parameter("mavlink_port").as_int());
+        connectToVehicle(get_parameter("mavsdk_connection_url").as_string());
 
         position_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
             position_topic, 10,
@@ -74,14 +63,6 @@ public:
             camera_info_topic, 10,
             std::bind(&TargetKalmanFilterNode::cameraInfoCallback, this,
                       std::placeholders::_1));
-        vehicle_position_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
-            vehicle_position_topic, 10,
-            std::bind(&TargetKalmanFilterNode::vehiclePositionCallback, this,
-                      std::placeholders::_1));
-        vehicle_heading_sub_ = create_subscription<std_msgs::msg::Float64>(
-            vehicle_heading_topic, 10,
-            std::bind(&TargetKalmanFilterNode::vehicleHeadingCallback, this,
-                      std::placeholders::_1));
 
         last_target_time_ = now();
         roi_timer_ = create_wall_timer(
@@ -93,6 +74,48 @@ public:
     }
 
 private:
+    void connectToVehicle(const std::string& connection_url) {
+        mavsdk_ = std::make_unique<mavsdk::Mavsdk>(
+            mavsdk::Mavsdk::Configuration{mavsdk::ComponentType::GroundStation});
+        mavsdk_->set_timeout_s(3.0);
+        const auto connection_result = mavsdk_->add_any_connection(connection_url);
+        if (connection_result != mavsdk::ConnectionResult::Success) {
+            throw std::runtime_error(
+                "MAVSDK connection failed with code " +
+                std::to_string(static_cast<int>(connection_result)));
+        }
+
+        std::shared_ptr<mavsdk::System> system;
+        for (int attempt = 0; attempt < 30 && rclcpp::ok() && !system; ++attempt) {
+            for (const auto& candidate : mavsdk_->systems()) {
+                if (candidate->is_connected()) {
+                    system = candidate;
+                    break;
+                }
+            }
+            if (!system) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+        if (!system) {
+            throw std::runtime_error("No PX4 vehicle found on MAVSDK UDP 14540");
+        }
+
+        telemetry_ = std::make_unique<mavsdk::Telemetry>(system);
+        telemetry_->subscribe_position([this](mavsdk::Telemetry::Position position) {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            vehicle_latitude_ = position.latitude_deg;
+            vehicle_longitude_ = position.longitude_deg;
+            vehicle_altitude_m_ = position.absolute_altitude_m;
+            have_vehicle_position_ = true;
+        });
+        telemetry_->subscribe_heading([this](mavsdk::Telemetry::Heading heading) {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            vehicle_heading_deg_ = heading.heading_deg;
+            have_vehicle_heading_ = true;
+        });
+    }
+
     void positionCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(data_mutex_);
         latest_pixel_ = *msg;
@@ -114,21 +137,6 @@ private:
         cx_ = msg->k[2];
         cy_ = msg->k[5];
         have_camera_info_ = fx_ > 0.0 && fy_ > 0.0;
-    }
-
-    void vehiclePositionCallback(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        vehicle_latitude_ = msg->latitude;
-        vehicle_longitude_ = msg->longitude;
-        vehicle_altitude_m_ = msg->altitude;
-        have_vehicle_position_ = std::isfinite(vehicle_latitude_) &&
-            std::isfinite(vehicle_longitude_) && std::isfinite(vehicle_altitude_m_);
-    }
-
-    void vehicleHeadingCallback(const std_msgs::msg::Float64::SharedPtr msg) {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        vehicle_heading_deg_ = msg->data;
-        have_vehicle_heading_ = std::isfinite(vehicle_heading_deg_);
     }
 
     void processMeasurementLocked() {
@@ -264,8 +272,6 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr position_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr distance_sub_;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr vehicle_position_sub_;
-    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr vehicle_heading_sub_;
     rclcpp::TimerBase::SharedPtr roi_timer_;
 
     std::mutex data_mutex_;
@@ -288,6 +294,8 @@ private:
     Eigen::Matrix4d covariance_;
     Eigen::Matrix4d process_noise_;
     Eigen::Matrix2d measurement_noise_;
+    std::unique_ptr<mavsdk::Mavsdk> mavsdk_;
+    std::unique_ptr<mavsdk::Telemetry> telemetry_;
     bool have_pixel_{false};
     bool have_distance_{false};
     bool have_camera_info_{false};

@@ -69,6 +69,7 @@ what the demo runs; `perceive` and `track` use it by default.
 To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
 `track`:
 
+- `PERCEIVE_TARGET=yolo_person` — unmarked person, YOLO detector (default)
 - `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
 - `PERCEIVE_TARGET=marked_person` — person with red marker,
   `red_sphere_detector`
@@ -84,21 +85,17 @@ To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
    viewer. Leave it running while tracking.
 4. In a third terminal, run `track`. It builds and runs `main`, which starts
    the geographic Kalman tracker from
-   `Include/Tracking/target_kalman_filter.hpp` and the camera-based centering
-   node from `Include/Tracking/track_and_center.hpp` together. The Kalman
-   tracker publishes MAVLink position/ROI updates; the centering node uses
-   the camera bearing to yaw the drone toward the detected target. Arm and
-   take off the vehicle yourself before centering; `track` does not arm, take
-   off, or land. If `track` is already running, centering starts when PX4
-   reports the vehicle armed. If it is disarmed, centering stops until it is
-   armed again. Press Ctrl+C in the `track` terminal to stop tracking;
+   `Include/Tracking/target_kalman_filter.hpp`. It reads vehicle position and
+   heading from MAVSDK and publishes MAVLink position/ROI updates for the
+   filtered target; it does not control vehicle movement or arm, take off, or
+   land. Press Ctrl+C in the `track` terminal to stop tracking;
    `fly` and `perceive` remain running until stopped in their own terminals.
 
-The default target is a red sphere. To track an unmarked person or a marked
-person, set the same target selection in the `perceive` and `track` terminals.
-For example, run `PERCEIVE_TARGET=person perceive` and
-`PERCEIVE_TARGET=person track`. Use `PERCEIVE_TARGET=marked_person` for the
-person with the red chest marker.
+The default target is an unmarked person detected by YOLO. To choose a
+different detector or a marked person, set the same target selection in the
+`perceive` and `track` terminals. For example, run
+`PERCEIVE_TARGET=person perceive` and `PERCEIVE_TARGET=person track`. Use
+`PERCEIVE_TARGET=marked_person` for the person with the red chest marker.
 
 Tracking is intended for PX4/Gazebo SITL only; do not run it against a real
 vehicle. Arm and take off using QGroundControl or the PX4 SITL controls first.

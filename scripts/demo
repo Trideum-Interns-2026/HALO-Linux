@@ -33,7 +33,7 @@ cleanup() {
     trap - EXIT INT TERM
 
     if ((${#job_pids[@]})); then
-        echo "Stopping demo processes (tracking will attempt to land)..."
+        echo "Stopping demo processes..."
     fi
     for pid in "${job_pids[@]}"; do
         collect_descendants "$pid"
@@ -43,7 +43,7 @@ cleanup() {
         kill -INT "$pid" 2>/dev/null || true
     done
 
-    # Allow ROS nodes and the tracker time to shut down and land.
+    # Allow ROS nodes and the tracker time to shut down.
     for _ in {1..70}; do
         local running=false
         for pid in "${shutdown_pids[@]}"; do
@@ -94,7 +94,7 @@ until ros2 topic list 2>/dev/null | grep -Fxq /yolo_person_detector/person/posit
     sleep 1
 done
 
-echo "Starting tracking. Press Ctrl+C to stop and land."
+echo "Starting tracking. Press Ctrl+C to stop."
 "$repo/scripts/track" &
 job_pids+=("$!")
 wait "${job_pids[2]}"
