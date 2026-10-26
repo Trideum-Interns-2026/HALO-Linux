@@ -26,3 +26,6 @@ ament_target_dependencies(main
     std_msgs
 )
 target_link_libraries(main Eigen3::Eigen MAVSDK::mavsdk)
+
+add_executable(move ${CMAKE_SOURCE_DIR}/Src/move.cpp)
+target_link_libraries(move MAVSDK::mavsdk)

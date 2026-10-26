@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -Ee -o pipefail
+
+source /opt/ros/jazzy/setup.bash
+if [[ -f /opt/ros2_ws/install/setup.bash ]]; then
+    source /opt/ros2_ws/install/setup.bash
+fi
+set -u
+
+script_path="$(readlink -f "${BASH_SOURCE[0]}")"
+repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
+build_dir="${repo_dir}/build"
+
+if (($# != 2)); then
+    echo "Usage: move <north_offset_m> <east_offset_m>" >&2
+    echo "Use offsets to a clear, unoccupied waypoint in PX4/Gazebo SITL only." >&2
+    exit 2
+fi
+
+cmake -S "$repo_dir" -B "$build_dir"
+cmake --build "$build_dir" --target move
+
+exec "$build_dir/move" "$@"

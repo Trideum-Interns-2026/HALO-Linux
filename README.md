@@ -105,6 +105,21 @@ vehicle. Arm and take off using QGroundControl or the PX4 SITL controls first.
 QGroundControl and the vehicle must be connected through MAVLink, and the
 tracking nodes use MAVSDK UDP `14540`.
 
+### Move command
+
+For a short movement test in PX4/Gazebo SITL, use `move` with
+north and east offsets in metres from the drone's current local position:
+
+```bash
+./scripts/move 0 1
+```
+
+Choose a clear, unoccupied waypoint. Each horizontal offset is limited to
+2 metres, altitude is held at its current value, and the vehicle must already
+be armed and airborne. The script does not arm, take off, or land; it returns
+PX4 to Hold when the waypoint is reached, on timeout, or when interrupted.
+This script is for SITL only, not a real vehicle.
+
 ### Docker resources
 
 The Compose files do not set CPU or storage limits. `fly` runs inside the
