@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101923">
+    <title>Mini Ground Station</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #101923;
+        color: #e7edf4;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; }
+      header { border-bottom: 1px solid #263544; padding: 22px clamp(20px, 5vw, 64px); }
+      header p { margin: 5px 0 0; color: #91a2b3; font-size: 14px; }
+      h1 { margin: 0; font-size: 22px; letter-spacing: 0.02em; }
+      main { width: min(1100px, 100%); margin: 0 auto; padding: 32px 20px 56px; }
+      .status { display: flex; align-items: center; gap: 10px; color: #a9bac9; font-size: 14px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #e0a43b; }
+      .dot.online { background: #42cf91; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin: 22px 0 36px; }
+      .card, .panel { border: 1px solid #293b4b; border-radius: 10px; background: #172330; }
+      .card { min-height: 116px; padding: 18px; }
+      .label { color: #9aabba; font-size: 13px; }
+      .value { margin-top: 12px; font-size: 25px; font-variant-numeric: tabular-nums; }
+      .unit { color: #a9bac9; font-size: 14px; }
+      .panel { padding: 22px; }
+      .panel h2 { margin: 0 0 8px; font-size: 17px; }
+      .hint { margin: 0 0 18px; color: #9aabba; font-size: 13px; line-height: 1.5; }
+      form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+      label { display: grid; gap: 7px; color: #b7c4d0; font-size: 13px; }
+      input { width: 100%; border: 1px solid #3a4c5b; border-radius: 6px; background: #101923; color: #e7edf4; padding: 10px; font: inherit; }
+      input:focus { outline: 2px solid #4aa7e8; outline-offset: 1px; }
+      button { grid-column: 1 / -1; justify-self: start; border: 0; border-radius: 6px; background: #248bd0; color: white; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+      button:hover { background: #37a0e8; }
+      #message { min-height: 20px; margin: 14px 0 0; color: #9aabba; font-size: 13px; }
+      #message.error { color: #ff9e91; }
+      footer { margin-top: 24px; color: #91a2b3; font-size: 13px; }
+      footer a { color: #7fc4f5; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Mini Ground Station</h1>
+      <p>Telemetry dashboard · local test setup</p>
+    </header>
+    <main>
+      <div class="status"><span class="dot" id="status-dot"></span><span id="connection-status">Connecting to API…</span></div>
+      <section class="grid" aria-label="Latest telemetry">
+        <article class="card"><div class="label">Latitude</div><div class="value" id="latitude">—</div></article>
+        <article class="card"><div class="label">Longitude</div><div class="value" id="longitude">—</div></article>
+        <article class="card"><div class="label">Altitude</div><div class="value"><span id="altitude">—</span> <span class="unit">m</span></div></article>
+        <article class="card"><div class="label">Heading</div><div class="value"><span id="heading">—</span> <span class="unit">°</span></div></article>
+        <article class="card"><div class="label">Ground speed</div><div class="value"><span id="speed">—</span> <span class="unit">m/s</span></div></article>
+        <article class="card"><div class="label">Battery</div><div class="value"><span id="battery">—</span> <span class="unit">%</span></div></article>
+        <article class="card"><div class="label">Flight mode</div><div class="value" id="mode">—</div></article>
+        <article class="card"><div class="label">Target latitude</div><div class="value" id="target-latitude">—</div></article>
+        <article class="card"><div class="label">Target longitude</div><div class="value" id="target-longitude">—</div></article>
+        <article class="card"><div class="label">Target altitude</div><div class="value"><span id="target-altitude">—</span> <span class="unit">m</span></div></article>
+        <article class="card"><div class="label">Target distance</div><div class="value"><span id="target-distance">—</span> <span class="unit">m</span></div></article>
+        <article class="card"><div class="label">Last received</div><div class="value" id="received-at" style="font-size: 17px">Waiting for data</div></article>
+      </section>
+
+      <section class="panel">
+        <h2>Send test telemetry</h2>
+        <p class="hint">Submit a sample position and status to check the API. This demo only stores and displays telemetry; it does not control a vehicle.</p>
+        <form id="telemetry-form">
+          <label>Latitude<input name="latitude" type="number" min="-90" max="90" step="any" value="34.7304" required></label>
+          <label>Longitude<input name="longitude" type="number" min="-180" max="180" step="any" value="-86.5861" required></label>
+          <label>Altitude (m)<input name="altitude_m" type="number" step="any" value="25" required></label>
+          <label>Heading (°)<input name="heading_deg" type="number" min="0" max="359.999" step="any" value="90" required></label>
+          <label>Ground speed (m/s)<input name="ground_speed_mps" type="number" min="0" step="any" value="3.5" required></label>
+          <label>Battery (%)<input name="battery_percent" type="number" min="0" max="100" step="any" value="85" required></label>
+          <label>Flight mode<input name="flight_mode" type="text" maxlength="40" value="HOLD" required></label>
+          <button type="submit">Send sample</button>
+        </form>
+        <p id="message" role="status" aria-live="polite"></p>
+      </section>
+      <footer>API: <a href="/docs">interactive API docs</a> · Updates every 2 seconds</footer>
+    </main>
+    <script>
+      const fields = {
+        latitude: "latitude",
+        longitude: "longitude",
+        altitude_m: "altitude",
+        heading_deg: "heading",
+        ground_speed_mps: "speed",
+        battery_percent: "battery",
+        flight_mode: "mode",
+        target_latitude: "target-latitude",
+        target_longitude: "target-longitude",
+        target_altitude_m: "target-altitude",
+        target_distance_m: "target-distance",
+      };
+      const message = document.getElementById("message");
+      const dot = document.getElementById("status-dot");
+      const connectionStatus = document.getElementById("connection-status");
+
+      function showTelemetry(data) {
+        for (const [key, elementId] of Object.entries(fields)) {
+          const value = data[key];
+          document.getElementById(elementId).textContent =
+            typeof value === "number" ? value.toFixed(4).replace(/\.?0+$/, "") : value ?? "—";
+        }
+        document.getElementById("received-at").textContent =
+          new Date(data.received_at).toLocaleTimeString();
+      }
+
+      async function refreshTelemetry() {
+        try {
+          const response = await fetch("/api/telemetry/latest");
+          if (!response.ok) throw new Error(`API returned ${response.status}`);
+          const data = await response.json();
+          dot.classList.add("online");
+          connectionStatus.textContent = "API connected";
+          if (data) showTelemetry(data);
+        } catch (error) {
+          dot.classList.remove("online");
+          connectionStatus.textContent = "API unavailable";
+          message.textContent = error.message;
+          message.classList.add("error");
+        }
+      }
+
+      document.getElementById("telemetry-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const payload = Object.fromEntries(form.entries());
+        for (const key of Object.keys(payload)) {
+          if (key !== "flight_mode") payload[key] = Number(payload[key]);
+        }
+
+        message.textContent = "Sending…";
+        message.classList.remove("error");
+        try {
+          const response = await fetch("/api/telemetry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail?.[0]?.msg ?? `API returned ${response.status}`);
+          showTelemetry(data);
+          message.textContent = "Sample received.";
+        } catch (error) {
+          message.textContent = `Could not send telemetry: ${error.message}`;
+          message.classList.add("error");
+        }
+      });
+
+      refreshTelemetry();
+      setInterval(refreshTelemetry, 2000);
+    </script>
+  </body>
+</html>

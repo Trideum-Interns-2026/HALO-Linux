@@ -15,22 +15,24 @@
 class MavlinkSender {
 public:
     MavlinkSender(const std::string& target_ip, int target_port) {
-        sock_ = socket(AF_INET, SOCK_DGRAM, 0);
+        sock_ = socket(AF_INET, SOCK_DGRAM, 0); //Create UDP socket using IPv4 protocol
         if (sock_ < 0) {
             std::cerr << "Failed to create socket\n";
             return;
         }
 
-        memset(&addr_, 0, sizeof(addr_));
-        addr_.sin_family = AF_INET;
+        
+        memset(&addr_, 0, sizeof(addr_)); //sets asside memory sending UDP packets
+        addr_.sin_family = AF_INET; // Use Ipv4
         addr_.sin_port = htons(target_port);
-        addr_.sin_addr.s_addr = inet_addr(target_ip.c_str());
+        addr_.sin_addr.s_addr = inet_addr(target_ip.c_str()); //the address to send the UDP packets to
     }
 
     ~MavlinkSender() {
         if (sock_ >= 0) close(sock_);
     }
 
+    // reports latitude longitude altitude and velocity
     void sendGlobalPosition(double lat, double lon, float alt,
                              float vx, float vy, float vz) {
         mavlink_message_t msg;
@@ -52,6 +54,7 @@ public:
         sendMessage(msg);
     }
 
+    // reports the target position as a system ID 2 
     void sendTargetPosition(double lat, double lon, float alt,
                             uint8_t target_system, uint8_t target_component) {
         mavlink_message_t heartbeat_msg;

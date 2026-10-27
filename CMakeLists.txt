@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(MAVSDK REQUIRED)
 find_package(ament_cmake REQUIRED)
+find_package(CURL REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -25,7 +26,7 @@ ament_target_dependencies(main
     sensor_msgs
     std_msgs
 )
-target_link_libraries(main Eigen3::Eigen MAVSDK::mavsdk)
+target_link_libraries(main Eigen3::Eigen MAVSDK::mavsdk CURL::libcurl)
 
 add_executable(track_and_center ${CMAKE_SOURCE_DIR}/Src/track_and_center.cpp)
 ament_target_dependencies(track_and_center

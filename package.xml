@@ -1,4 +1,5 @@
 <depend>rclcpp</depend>
+<depend>libcurl-dev</depend>
 <depend>sensor_msgs</depend>
 <depend>cv_bridge</depend>
 <depend>opencv_imgproc</depend>

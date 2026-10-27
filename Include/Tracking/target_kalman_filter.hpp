@@ -5,8 +5,10 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 
 #include <Eigen/Dense>
@@ -18,6 +20,7 @@
 #include <std_msgs/msg/float64.hpp>
 
 #include "Groundstation/mavlink_interface.hpp"
+#include "Groundstation/telemetry_api_client.hpp"
 
 class TargetKalmanFilterNode : public rclcpp::Node {
 public:
@@ -33,6 +36,7 @@ public:
         declare_parameter("camera_info_topic", "/camera/front/camera_info");
         declare_parameter("mavlink_endpoint", "127.0.0.1");
         declare_parameter("mavlink_port", 14550);
+        declare_parameter("groundstation_api_url", "http://127.0.0.1:8000/api/telemetry");
         declare_parameter("vehicle_position_topic", "/vehicle/position");
         declare_parameter("vehicle_heading_topic", "/vehicle/heading_deg");
         declare_parameter("roi_period_ms", 200);
@@ -61,6 +65,11 @@ public:
         sender_ = std::make_unique<MavlinkSender>(
             get_parameter("mavlink_endpoint").as_string(),
             get_parameter("mavlink_port").as_int());
+        telemetry_api_client_ = std::make_unique<TelemetryApiClient>(
+            get_parameter("groundstation_api_url").as_string(),
+            [this](const std::string& error) {
+                RCLCPP_WARN(get_logger(), "Groundstation API POST failed: %s", error.c_str());
+            });
 
         position_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
             position_topic, 10,
@@ -230,6 +239,8 @@ private:
         const double longitude = filter_reference_longitude_ +
             state_(1) / (111111.0 * std::cos(degToRad(filter_reference_latitude_)));
         const double altitude = vehicle_altitude_m_ - target_down_m_;
+        const double heading = std::fmod(vehicle_heading_deg_, 360.0);
+        const double normalized_heading = heading < 0.0 ? heading + 360.0 : heading;
 
         RCLCPP_INFO_THROTTLE(
             get_logger(), *get_clock(), 1000,
@@ -253,6 +264,19 @@ private:
             static_cast<float>(altitude),
             target_system,
             target_component);
+
+        std::ostringstream telemetry_json;
+        telemetry_json << std::setprecision(15)
+                       << "{\"latitude\":" << vehicle_latitude_
+                       << ",\"longitude\":" << vehicle_longitude_
+                       << ",\"altitude_m\":" << vehicle_altitude_m_
+                       << ",\"heading_deg\":" << normalized_heading
+                       << ",\"target_latitude\":" << latitude
+                       << ",\"target_longitude\":" << longitude
+                       << ",\"target_altitude_m\":" << altitude
+                       << ",\"target_distance_m\":" << latest_distance_m_
+                       << '}';
+        telemetry_api_client_->submit(telemetry_json.str());
     }
 
     static double degToRad(double degrees) {
@@ -260,6 +284,7 @@ private:
     }
 
     std::unique_ptr<MavlinkSender> sender_;
+    std::unique_ptr<TelemetryApiClient> telemetry_api_client_;
 
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr position_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr distance_sub_;
