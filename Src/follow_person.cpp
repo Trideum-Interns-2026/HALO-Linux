@@ -23,9 +23,9 @@ namespace {
 constexpr double kDefaultDistanceM = 6.0;
 constexpr double kMinDistanceM = 4.0;
 constexpr double kMaxDistanceM = 9.0;
-constexpr double kMaxForwardSpeedMps = 0.4;
-constexpr double kMaxStrafeSpeedMps = 0.25;
-constexpr double kMaxYawRateDegS = 25.0;
+constexpr double kMaxForwardSpeedMps = 0.7;
+constexpr double kMaxStrafeSpeedMps = 0.45;
+constexpr double kMaxYawRateDegS = 45.0;
 constexpr auto kTargetLifetime = std::chrono::milliseconds(800);
 constexpr auto kLoopPeriod = std::chrono::milliseconds(100);
 
@@ -236,7 +236,9 @@ private:
 
             const double lateral_error = clamp(normalized * 0.7, -1.0, 1.0);
             right_m_s = clamp(lateral_error * max_strafe, -max_strafe, max_strafe);
-            yawspeed_deg_s = clamp(normalized * max_yaw, -max_yaw, max_yaw);
+            // Keep the drone pointed at the detected person whenever the person is present in frame.
+            const double yaw_to_target_deg_s = clamp(normalized * max_yaw, -max_yaw, max_yaw);
+            yawspeed_deg_s = yaw_to_target_deg_s;
 
             RCLCPP_INFO_THROTTLE(
                 get_logger(), *get_clock(), 1000,
