@@ -20,12 +20,12 @@
 
 namespace {
 
-constexpr double kDefaultDistanceM = 3.5;
-constexpr double kMinDistanceM = 2.0;
-constexpr double kMaxDistanceM = 6.0;
-constexpr double kMaxForwardSpeedMps = 0.6;
-constexpr double kMaxStrafeSpeedMps = 0.35;
-constexpr double kMaxYawRateDegS = 35.0;
+constexpr double kDefaultDistanceM = 6.0;
+constexpr double kMinDistanceM = 4.0;
+constexpr double kMaxDistanceM = 9.0;
+constexpr double kMaxForwardSpeedMps = 0.4;
+constexpr double kMaxStrafeSpeedMps = 0.25;
+constexpr double kMaxYawRateDegS = 25.0;
 constexpr auto kTargetLifetime = std::chrono::milliseconds(800);
 constexpr auto kLoopPeriod = std::chrono::milliseconds(100);
 
