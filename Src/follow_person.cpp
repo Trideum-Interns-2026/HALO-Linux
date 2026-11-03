@@ -230,7 +230,7 @@ private:
 
             if (have_distance) {
                 distance_m = clamp(distance_m, min_distance, max_distance);
-                const double distance_error = safe_distance - distance_m;
+                const double distance_error = distance_m - safe_distance;
                 forward_m_s = clamp(distance_error * 0.35, -max_forward, max_forward);
             }
 
