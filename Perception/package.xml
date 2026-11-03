@@ -2,18 +2,21 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>perception</name>
-  <version>0.1.0</version>
-  <description>Camera-based red sphere detection for the HALO drone (Gazebo camera feed -> OpenCV).</description>
-  <maintainer email="cohen@example.com">Cohen</maintainer>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="cohen.hill@ascte.org">root</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>cv_bridge</depend>
-  <depend>python3-opencv</depend>
-    <depend>ros_gz_bridge</depend>
-    <depend>std_msgs</depend>
+  <depend>perception_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>
