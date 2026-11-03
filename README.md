@@ -120,6 +120,16 @@ be armed and airborne. The script does not arm, take off, or land; it returns
 PX4 to Hold when the waypoint is reached, on timeout, or when interrupted.
 This script is for SITL only, not a real vehicle.
 
+For the autonomous person-follow behavior, run:
+
+```bash
+./scripts/move --follow-person
+```
+
+This spawns a standing person, starts the YOLO detector, arms and takes off
+if the vehicle is ready, and then keeps the drone circling at a safe
+follow distance while yawing to center the person in the camera frame.
+
 ### Docker resources
 
 The Compose files do not set CPU or storage limits. `fly` runs inside the

@@ -11,8 +11,41 @@ script_path="$(readlink -f "${BASH_SOURCE[0]}")"
 repo_dir="$(cd "$(dirname "$script_path")/.." && pwd)"
 build_dir="${repo_dir}/build"
 
+if (($# == 0)); then
+    set -- --follow-person
+fi
+
+if [[ "$1" == "--follow-person" ]]; then
+    if (($# != 1)); then
+        echo "Usage: move --follow-person" >&2
+        exit 2
+    fi
+
+    cmake -S "$repo_dir" -B "$build_dir"
+    cmake --build "$build_dir" --target follow_person
+
+    echo "Spawning a person and starting autonomous follow behavior..."
+    "$repo_dir/Perception/scripts/spawn_person.sh" 5 0 0
+
+    ros2 launch perception gz_harmonic_bridge.launch.py > /tmp/halo-camera-bridge.log 2>&1 &
+    bridge_pid=$!
+    sleep 2
+    PERCEIVE_TARGET="person" ros2 launch perception yolo_person_detection.launch.py > /tmp/halo-person-detector.log 2>&1 &
+    detector_pid=$!
+    cleanup() {
+        kill "$detector_pid" 2>/dev/null || true
+        kill "$bridge_pid" 2>/dev/null || true
+        wait "$detector_pid" 2>/dev/null || true
+        wait "$bridge_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT INT TERM
+
+    sleep 3
+    exec "$build_dir/follow_person"
+fi
+
 if (($# != 2)); then
-    echo "Usage: move <north_offset_m> <east_offset_m>" >&2
+    echo "Usage: move <north_offset_m> <east_offset_m> | move --follow-person" >&2
     echo "Use offsets to a clear, unoccupied waypoint in PX4/Gazebo SITL only." >&2
     exit 2
 fi
