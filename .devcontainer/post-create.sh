@@ -9,7 +9,8 @@ if [ -d /workspace/Perception ]; then
     (cd /opt/ros2_ws && colcon build --packages-select perception --symlink-install)
 fi
 
-ln -sfn /workspace/scripts/track /usr/local/bin/track
+ln -sfn /workspace/Tracking/scripts/tracking /usr/local/bin/tracking
+ln -sfn /workspace/Geolocation/scripts/geolocation /usr/local/bin/geolocation
 
 # The bind-mounted repo is owned by the host user (uid 1000) but the container
 # runs as root, so git refuses it as "dubious ownership" without this.
@@ -49,5 +50,11 @@ grep -q "alias spawn_person=" /etc/bash.bashrc || \
     echo "alias spawn_person='/workspace/Perception/scripts/spawn_person.sh'" >> /etc/bash.bashrc
 grep -q "alias perceive=" /etc/bash.bashrc || \
     echo "alias perceive='/workspace/Perception/scripts/run_perception_demo.sh'" >> /etc/bash.bashrc
-grep -q "alias track=" /etc/bash.bashrc || \
-    echo "alias track='/workspace/scripts/track'" >> /etc/bash.bashrc
+sed -i '/^alias track=/d' /etc/bash.bashrc
+sed -i '/^alias gps=/d' /etc/bash.bashrc
+sed -i '/^alias tracking=/d' /etc/bash.bashrc
+sed -i '/^alias geolocation=/d' /etc/bash.bashrc
+grep -q "alias tracking=" /etc/bash.bashrc || \
+    echo "alias tracking='/workspace/scripts/tracking'" >> /etc/bash.bashrc
+grep -q "alias geolocation=" /etc/bash.bashrc || \
+    echo "alias geolocation='/workspace/scripts/geolocation'" >> /etc/bash.bashrc

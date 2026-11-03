@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<message name="TrackingState">
+  <field name="timestamp_ns" type="int64" description="Unix timestamp in nanoseconds"/>
+  <field name="latitude_deg" type="double" description="Target latitude in decimal degrees"/>
+  <field name="longitude_deg" type="double" description="Target longitude in decimal degrees"/>
+  <field name="altitude_m" type="double" description="Target altitude above mean sea level in meters"/>
+  <field name="position" type="triplet" description="LLA position"/>
+  <field name="error" type="triplet" description="Euclidean error in ENU/ECEF frame for covariance volume"/>
+  <field name="coord_frame" type="string" description="Coordinate frame used for the error triplet (ENU or ECEF)"/>
+  <field name="confidence" type="double" description="Target confidence score"/>
+  <field name="range_m" type="double" description="Range estimate derived from bounding-box height and average adult height"/>
+  <field name="covariance_diag" type="double[9]" description="Diagonal covariance values for x, y, z"/>
+</message>
