@@ -1,30 +1,110 @@
-# NVIDIA DGX Spark override (native ARM64 Linux — not WSL2). The Spark runs
-# Ubuntu directly with the NVIDIA driver and container toolkit installed, so
-# GPU access goes through the standard nvidia-container-toolkit device
-# reservation (Compose's equivalent of `docker run --gpus`), and display
-# forwarding is plain X11 — none of the WSLg/D3D12 translation layer in
-# docker-compose.wsl.yml (that one's Windows/WSL2-only) is needed here.
+# NVIDIA DGX Spark override — one container PER DEVELOPER, reached through
+# SSH + VS Code Remote-SSH, never from a desktop session on the Spark itself
+# (the Spark is a headless host now; see docs/spark/README.md).
 #
-# Prerequisites on the Spark:
-#   - NVIDIA Container Toolkit installed and configured for Docker
-#     (nvidia-ctk runtime configure --runtime=docker), so `docker info`
-#     lists "nvidia" under Runtimes.
-#   - Docker allowed to connect to the local X server:
-#     `xhost +local:docker`
+# Why this looks different from docker-compose.wsl.yml:
+#   - Every teammate has their own clone and their own `.env` with
+#     HALO_DEV=<name>. That name becomes the compose project name, so each
+#     person gets distinct containers/networks/images (halo-cohen-px4-sitl-1,
+#     halo-brooks-px4-sitl-1, ...) instead of five people exec'ing into one.
+#   - Plain bridge networking, not `network_mode: host`. Each project gets
+#     its own bridge, so nobody's ports collide with anybody else's and no
+#     per-person port-numbering scheme is needed. Nothing is published on
+#     the host either: the Selkies desktop is reached only through the
+#     developer's own VS Code port forward (.devcontainer/spark/devcontainer.json).
+#   - No host X11 socket. The GUI renders into a virtual display inside the
+#     container and streams to the browser via Selkies (NVENC-encoded).
+#   - GPU via CDI (`nvidia.com/gpu=all`) — this only works with the NATIVE
+#     docker engine + nvidia-container-toolkit, which is the whole point of
+#     the migration (Docker Desktop's engine VM never sees the host CDI spec).
 #
-# Usage (from a terminal on the Spark, in this folder):
-#   docker compose -f docker-compose.yml -f docker-compose.spark.yml run --rm px4-sitl
-#
-# The base image (px4io/px4-sitl-gazebo-ros2) and this repo's Dockerfile are
-# multi-arch (amd64 + arm64) — `docker compose build` picks the arm64 image
-# and MAVSDK build automatically on the Spark, no --platform flag needed.
+# Usage: don't run this by hand — open the repo on the Spark in VS Code and
+# "Dev Containers: Reopen in Container" with the Spark profile. If you need
+# a shell without VS Code:
+#   docker compose -f docker-compose.yml -f docker-compose.spark.yml run --rm px4-sitl bash
+
+# `:?` makes compose refuse to start with a clear message if HALO_DEV is
+# unset, rather than silently merging everyone into project "halo-".
+# NOTE: VS Code Dev Containers names the project after the folder
+# ("halo-linux" — the same for every clone!) unless COMPOSE_PROJECT_NAME is
+# in .env, so initialize.sh writes that too; this `name:` covers running
+# compose by hand.
+name: halo-${HALO_DEV:?HALO_DEV is not set - put HALO_DEV=<yourname> in .env (see docs/spark/README.md)}
 
 services:
   px4-sitl:
-    network_mode: host
+    build:
+      context: .
+      # Layers Selkies/X/VirtualGL/tritonclient on top of the normal image.
+      # The root Dockerfile is NOT modified for the Spark — it's built first
+      # by .devcontainer/spark/initialize.sh and referenced here as BASE_IMAGE.
+      dockerfile: .devcontainer/spark/Dockerfile
+      args:
+        BASE_IMAGE: halo-base:${HALO_DEV}
+        TRITON_TAG: ${TRITON_TAG:-25.09}
+    image: halo-spark:${HALO_DEV}
+    # Own bridge per project (default) + the shared inference network. The
+    # base compose file sets no network_mode, so nothing to override.
+    networks:
+      - default
+      - halo-inference
+    # Gazebo + Fast DDS move multi-MB camera frames through /dev/shm; the
+    # docker default of 64 MB is far too small once the sim is up.
+    shm_size: 2gb
+    # docker-init as PID 1. The dev container's PID 1 is otherwise `sleep
+    # infinity` (.devcontainer/docker-compose.extend.yml), which never
+    # reaps: every daemon start-desktop.sh launches and every process a
+    # developer kills would sit there as a zombie — and QGroundControl's
+    # single-instance lock sees a zombie as "still running".
+    init: true
     environment:
-      - DISPLAY=${DISPLAY}
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Needed on top of the CDI device: `graphics` for EGL/OpenGL and
+      # `video` for NVENC — compute-only (the toolkit default) gives a GPU
+      # that can run YOLO but can neither render Gazebo nor encode video.
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # Virtual display created by .devcontainer/spark/start-desktop.sh.
+      - DISPLAY=:0
+      # --- Shared Triton inference (infra/triton) -------------------------
+      # Hostname of the Triton container on the shared `halo-inference`
+      # bridge. yolo_person_detector switches to its Triton backend when
+      # this is set; unset it to fall back to in-process Ultralytics.
+      - HALO_TRITON_URL=${HALO_TRITON_URL:-triton:8001}
+      # --- Discovery fencing --------------------------------------------
+      # Every developer's container joins `halo-inference` to reach Triton,
+      # so without these, ROS 2 (DDS multicast) and Gazebo transport would
+      # discover each other's sims across that shared network and five
+      # people would be flying each other's drones. Keep everything on
+      # loopback inside the container.
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+      - ROS_LOCALHOST_ONLY=1
+      - GZ_IP=127.0.0.1
+      # --- Selkies remote desktop ---------------------------------------
+      # (QGroundControl is NOT in here: it runs on the developer's laptop,
+      # reached through the MAVLink TCP bridge start-desktop.sh starts on
+      # MAVLINK_TCP_PORT, forwarded by VS Code like Selkies' port.)
+      # Selkies 2.x streams over a plain WebSocket on this one port, which
+      # VS Code forwards through the developer's SSH tunnel — no WebRTC/TURN
+      # relay and no second port. h264enc is encoded on NVENC (that's what
+      # the `video` half of NVIDIA_DRIVER_CAPABILITIES=all is for).
+      - SELKIES_ENCODER=h264enc
+      - SELKIES_PORT=8080
+      - SELKIES_AUDIO_ENABLED=false
+      - SELKIES_ENABLE_BASIC_AUTH=true
+      - SELKIES_BASIC_AUTH_USER=${HALO_DEV}
+      # Generated into .env on first open by initialize.sh.
+      - SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_BASIC_AUTH_PASSWORD:?run .devcontainer/spark/initialize.sh}
+      # --- MAVLink bridge for QGroundControl on the laptop ---------------
+      # PX4 SITL sends its GCS stream to 127.0.0.1:14550 inside the
+      # container; mavlink-tcp-bridge re-serves it as a TCP stream here. Every developer
+      # gets the same port because every container has its own bridge and
+      # its own tunnel — nothing is published on the Spark.
+      - MAVLINK_TCP_PORT=5760
     devices:
       - nvidia.com/gpu=all
+
+networks:
+  # Created by initialize.sh (or infra/triton/docker-compose.yml, whichever
+  # runs first) and shared by every dev container plus Triton. Internal
+  # bridge only — this hop never leaves the Spark.
+  halo-inference:
+    external: true
