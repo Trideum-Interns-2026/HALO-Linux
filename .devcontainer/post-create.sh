@@ -5,8 +5,9 @@ source /opt/ros/jazzy/setup.bash
 
 if [ -d /workspace/Perception ]; then
     mkdir -p /opt/ros2_ws/src
+    ln -sfn /workspace/perception_msgs /opt/ros2_ws/src/perception_msgs
     ln -sfn /workspace/Perception /opt/ros2_ws/src/Perception
-    (cd /opt/ros2_ws && colcon build --packages-select perception --symlink-install)
+    (cd /opt/ros2_ws && colcon build --packages-select perception_msgs perception --symlink-install)
 fi
 
 ln -sfn /workspace/scripts/track /usr/local/bin/track
