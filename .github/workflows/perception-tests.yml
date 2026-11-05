@@ -1,0 +1,50 @@
+# Builds perception_msgs + perception and runs their tests on every push / PR
+# that touches them. Uses the plain ros:jazzy image (no PX4/Gazebo/GPU), since
+# the tests need no sim and fake the Triton server.
+name: perception-tests
+
+on:
+  push:
+    paths:
+      - "Perception/**"
+      - "perception_msgs/**"
+      - ".github/workflows/perception-tests.yml"
+  pull_request:
+    paths:
+      - "Perception/**"
+      - "perception_msgs/**"
+      - ".github/workflows/perception-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-opencv python3-pytest python3-pip \
+            ros-jazzy-cv-bridge \
+            ros-jazzy-ament-lint-auto ros-jazzy-ament-lint-common
+          pip install --break-system-packages "tritonclient[grpc]"
+
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths perception_msgs Perception \
+            --packages-select perception_msgs perception
+
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --base-paths perception_msgs Perception \
+            --packages-select perception_msgs perception \
+            --event-handlers console_direct+
+          colcon test-result --verbose
