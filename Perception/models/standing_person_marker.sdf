@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!--
+  Standing human test target with a red chest marker, for
+  red_sphere_detector (see standing_person.sdf for the unmarked variant that
+  person_detector tracks).
+
+  Reuses the "Standing person" mesh from Gazebo Fuel (downloaded and cached in
+  ~/.gz/fuel the first time it's spawned, so the first spawn needs internet),
+  but wrapped in our own static model: the Fuel model itself is a dynamic
+  80kg body that can tip over, which a still perception target shouldn't do.
+
+  The red sphere on the chest is the same size and color as red_sphere.sdf
+  (0.4m diameter), so red_sphere_detector's HSV threshold and distance
+  estimate (sphere_diameter_m = 0.4) work on it unchanged.
+
+  The mesh faces -y in its own frame; the link is yawed -90deg so that at
+  spawn yaw 0 the person faces world -x, i.e. back toward a drone at origin.
+-->
+<sdf version="1.6">
+  <model name="standing_person">
+    <static>true</static>
+    <link name="link">
+      <pose>0 0 0 0 0 -1.5708</pose>
+      <collision name="body">
+        <pose>0 -0.05 0.95 0 0 0</pose>
+        <geometry>
+          <box><size>0.55 0.35 1.9</size></box>
+        </geometry>
+      </collision>
+      <visual name="person">
+        <geometry>
+          <mesh>
+            <uri>https://fuel.gazebosim.org/1.0/openrobotics/models/standing person/3/files/meshes/standing.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <visual name="red_marker">
+        <pose>0 -0.15 1.3 0 0 0</pose>
+        <geometry>
+          <sphere><radius>0.2</radius></sphere>
+        </geometry>
+        <material>
+          <ambient>1 0 0 1</ambient>
+          <diffuse>1 0 0 1</diffuse>
+          <specular>0.2 0.2 0.2 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
