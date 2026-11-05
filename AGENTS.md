@@ -1,0 +1,297 @@
+# AGENTS.md — HALO-Linux
+
+Guide for AI coding agents working in this repo. Read it fully before changing anything.
+MUST = required. NEVER = forbidden. SHOULD = default unless a comment explains why not.
+
+## What this project is
+
+HALO is a police-support drone, currently developed in simulation: PX4 SITL + Gazebo Harmonic +
+ROS 2 Jazzy, controlled over MAVSDK/MAVLink, monitored in QGroundControl.
+
+The system is split into microservices. They are equal peers: each has its own owner,
+interface and tests, and no one service is the template or the priority. The rules in
+"Microservice rules" apply to all of them the same way.
+
+| Service | Owner | Job | Input | Output | Code today |
+| --- | --- | --- | --- | --- | --- |
+| Perception | Cohen | Find a person in camera images | camera image (ROS 2) | `perception_msgs/Detection`: header, confidence, bounding box in pixels | `Perception/`, `perception_msgs/` (done) |
+| Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | header + LLA position + error (see "Position output format") | none yet |
+| Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | same format as Geolocation | old code in `Include/Tracking/`, `Src/main.cpp` (to be replaced) |
+| Movement | Lisa | Follow the POI: go to a set distance from it, circle it, keep it centered | POI position (ROS 2) | vehicle motion only, sent as MAVLink goto commands (not ROS) | old code in `Src/move.cpp`, `Src/follow_person.cpp`, `track_and_center.hpp` (to be replaced) |
+| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | `Include/Groundstation/mavlink_interface.hpp` (ROI to QGC); no web code yet |
+
+Design decisions already made:
+- Every service output carries a timestamp (`std_msgs/Header`).
+- Geolocation (drone) and Tracking (person) publish the same message format: a position triplet in
+  LLA plus an error triplet in ECEF (see below). Only what they locate and their inputs differ.
+- Range to the person is internal to Tracking, not a published output. The expected human height
+  error is folded into the error triplet. That is why `Detection` has no distance field.
+- Movement subscribes to the POI position over ROS 2 and commands the vehicle only over MAVLink
+  (goto commands), NOT ROS. It also owns centering the target in the camera.
+- The UI must NOT connect directly to ROS or the drone. A ROS-side bridge node translates data to
+  web formats and serves it over the network (HTTP); MAVLink may be used for drone health.
+- The old C++ tracking/follow code in `Src/` and `Include/` is replaced by these services, not
+  extended. Do not add features to it; port what is useful into the owning service.
+
+### Position output format (Geolocation and Tracking)
+
+1. Position: latitude (deg), longitude (deg), altitude (m above the WGS84 ellipsoid, as PX4 GPS reports it).
+2. Error: an x, y, z triplet in ECEF metres.
+   Why not LLA for error: LLA is non-Euclidean, so an error volume in it warps and is hard to
+   draw, and the error is radial. ECEF is Cartesian, so the error is a smooth sphere/ellipsoid
+   that is easy to render (and suits radar).
+
+Not decided yet: exactly what the error triplet means (per-axis 1-sigma, a radius, or something
+else) and the `.msg` field names. Do not pick these in code; ask Brooks. The message goes in a
+shared `_msgs` package used by Geolocation, Tracking, Movement and the UI bridge.
+
+### Language choice
+
+Each owner picks, following the general rule: C++ for performance-critical back-end components
+(control loops, MAVLink/MAVSDK, high-rate filtering), Python for rapid prototyping, high-level
+autonomy, and AI/ML orchestration (e.g. Perception calling Triton). Write the reason in the
+service README if you go against it.
+
+### Package names
+
+Follow the existing pattern: folder `<Name>/` with package `<name>`, plus `<name>_msgs/` for its
+types (e.g. `Geolocation/` + `geolocation_msgs/`, `Movement/`, `UI/`). Confirm the exact name with
+the owner before creating a package.
+
+## Repo map
+
+| Path | What it is |
+| --- | --- |
+| `Src/` | C++ executables: `main.cpp` (tracking: Kalman + centering), `move.cpp` (waypoint test), `follow_person.cpp` (autonomous follow) |
+| `Include/Tracking/` | `target_kalman_filter.hpp`, `track_and_center.hpp` (ROS 2 nodes used by `main`) |
+| `Include/Groundstation/` | `mavlink_interface.hpp` (raw MAVLink UDP sender for ROI commands) |
+| `CMakeLists.txt`, `package.xml` (root) | Build for the C++ code above (plain CMake, built by `scripts/*`, NOT colcon) |
+| `Perception/`, `perception_msgs/` | Perception service: node package + interface package |
+| `scripts/` | `fly` (start sim), `track`, `move`, `follow_person`, `demo`, `spark/verify.sh` |
+| `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
+| `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
+| `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
+| `Dockerfile`, `docker-compose*.yml` | Base image (`px4io/px4-sitl-gazebo-ros2`) and compose overrides (`.wsl`, `.spark`) |
+| `docs/spark/README.md` | Full Spark setup + QGroundControl over TCP |
+| `.github/workflows/` | CI (`perception-tests.yml`) |
+
+## Environments
+
+Two dev container profiles. Code runs inside the container; the repo is mounted at `/workspace`.
+
+| | WSL2 (default) | DGX Spark |
+| --- | --- | --- |
+| Profile | `.devcontainer/devcontainer.json` | `.devcontainer/spark/devcontainer.json` |
+| Arch | x86_64 | ARM64, shared headless host, one container per developer (`HALO_DEV` in `.env`) |
+| GUI | WSLg | Selkies in the browser (port 8080), GL via `vglrun` |
+| QGroundControl | UDP | On the laptop, TCP `127.0.0.1:5760` via a MAVLink TCP bridge |
+| Triton / `tritonclient` | Not available | `HALO_TRITON_URL=triton:8001`, `tritonclient` installed by `.devcontainer/spark/Dockerfile` |
+
+Facts that cause bugs if forgotten:
+- Anything that calls Triton (today: perception) only runs on the Spark profile as of now.
+- `PX4_SIM_MODEL=gz_x500_depth` (X500 + OakD-Lite). Plain `gz_x500` has no camera.
+- The color camera is 1920x1080 at 15 Hz (the Dockerfile caps it from 30).
+- Spark containers are fenced to localhost (`ROS_LOCALHOST_ONLY=1`, `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, `GZ_IP=127.0.0.1`) so developers don't see each other's sims. NEVER remove these.
+- Gazebo world name is usually `default`; scripts find it dynamically via `Perception/scripts/gz_world.sh`.
+- The camera bridge launch (`Perception/launch/gz_harmonic_bridge.launch.py`) and the person spawner live in `Perception/` today but are shared sim tooling; any service can use them.
+- `ROS_LOCALHOST_ONLY is deprecated` warnings at node startup are expected; ignore them.
+
+## Commands
+
+```bash
+fly                       # terminal 1: PX4 SITL + Gazebo (waits until /world/default/create exists)
+HEADLESS=1 fly            # same, no Gazebo window
+perceive                  # terminal 2: camera bridge + YOLO detector (ros2 launch perception perception.launch.py)
+spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
+track                     # tracking (builds + runs build/main)
+./scripts/move <n_m> <e_m>   # short waypoint test, |offset| <= 2 m, vehicle must already be airborne
+
+# ROS 2 packages (build workspace is /opt/ros2_ws, packages symlinked from /workspace)
+cd /opt/ros2_ws && colcon build --packages-select <pkg>_msgs <pkg> --symlink-install && source install/setup.bash
+
+# C++ in the root project (Src/)
+cmake -S /workspace -B /workspace/build && cmake --build /workspace/build --target <main|move|follow_person>
+
+# tests for any ROS 2 package
+cd /opt/ros2_ws && colcon test --packages-select <pkg>_msgs <pkg> && colcon test-result --verbose
+cd /workspace/<Pkg> && python3 -m pytest test/ -v        # Python packages, faster
+
+# useful checks
+ros2 topic list
+ros2 topic echo <topic>
+ros2 interface show <pkg>_msgs/msg/<Type>
+gz topic -l | grep image
+```
+
+- NEVER run `colcon build` in `/workspace`: the root `package.xml` makes colcon see the wrong package.
+- Python edits in an ament_python package need no rebuild (`--symlink-install`); restart the node. New files, `setup.py`, `package.xml`, `CMakeLists.txt`, `.msg` or any C++ change need a rebuild.
+- `fly`, `track` and `move` do NOT arm or take off (except `move --follow-person`). Arm and take off in QGroundControl first.
+- MAVSDK connects on `udpin://0.0.0.0:14540`. Ground-station MAVLink on UDP 14550.
+
+## Data flow between services
+
+```
+camera (sim/HW) ──ROS 2──> Perception ──Detection──────────────┐
+drone GPS + perception ──> Geolocation ──drone LLA + error──┬──> Tracking ──person LLA + error──┬──> Movement ──MAVLink goto──> vehicle
+                                                             │                                   └──> UI bridge node ──HTTP──> website
+                                                             └──────────────────────────────────────> UI bridge node
+vehicle telemetry (MAVLink) ──> QGroundControl, UI bridge node (drone health)
+```
+
+Transport rules:
+- Between ROS services: ROS 2 topics with typed messages from `_msgs` packages.
+- To the vehicle: MAVLink (Movement only).
+- To the UI: through a translation layer to web formats over HTTP; never a direct ROS or drone link.
+- NEVER import another service's Python module or C++ header to share logic; share types through `_msgs` packages.
+
+Interfaces that exist today:
+
+| Topic | Type | Publisher | Notes |
+| --- | --- | --- | --- |
+| `/camera/front/image_raw` | `sensor_msgs/Image` | camera bridge (sim) | 1920x1080, 15 Hz in sim |
+| `/camera/front/camera_info` | `sensor_msgs/CameraInfo` | camera bridge (sim) | intrinsics |
+| `/perception/detection` | `perception_msgs/Detection` | Perception | header, confidence, x_min/y_min/x_max/y_max in pixels; only when a target is seen |
+| `/vehicle/position`, `/vehicle/heading_deg` | see `Include/Tracking/*.hpp` | `main` (old tracking code) | internal to `main`; goes away when it is replaced |
+
+## Known broken or stale
+
+The perception interface changed: the old package published `geometry_msgs/PointStamped` on
+`/<detector>/<target>/position` and `std_msgs/Float32` on `.../distance`; the new one publishes
+`Detection` on `/perception/detection`. These still expect the old interface:
+
+- `Src/follow_person.cpp`: subscribes to `/yolo_person_detector/person/position` and `/distance`.
+- `Include/Tracking/track_and_center.hpp`, `target_kalman_filter.hpp`: default to `/red_sphere_detector/red_sphere/*`.
+- `scripts/track`: passes red-sphere / `person_detector` topics via `PERCEIVE_TARGET`.
+- `scripts/move --follow-person`: launches the deleted `yolo_person_detection.launch.py`.
+- `scripts/demo`: runs the deleted `Perception/scripts/run_perception_demo.sh` and waits for the old topic.
+- Root `README.md`: describes the old detector, debug image, `PERCEIVE_TARGET`, and a `run_all.py` that does not exist.
+- `.vscode/settings.json`: points at ROS Foxy / Python 3.8 and a `Movement/` folder that does not exist.
+- `Detection` has no distance, by design: ranging belongs inside Tracking (e.g. pinhole `height_m * fy / box_height_px` from `camera_info`, test person 1.9 m, with height spread folded into the error).
+
+The C++ items above are being replaced by the new services; only patch them if a task needs the old demo working in the meantime. When fixing one, update every file the change touches in the same PR.
+
+## Microservice rules (every service)
+
+Each service is written in whichever language fits it: Python (`ament_python`) or C++
+(`ament_cmake`, rclcpp). The rules are the same; language-specific notes are marked.
+
+Layout for a service `<name>`:
+```
+<Name>/                  node package, package name lowercase <name>
+  package.xml, README.md, launch/<name>.launch.py, test/
+  Python: setup.py, setup.cfg, resource/<name> (empty, must match package name),
+          <name>/__init__.py, <name>/<node>.py
+  C++:    CMakeLists.txt, include/<name>/*.hpp, src/*.cpp
+<name>_msgs/             ament_cmake interface package: package.xml, CMakeLists.txt, msg/<Type>.msg
+                         (no src/ or include/)
+.github/workflows/<name>-tests.yml
+```
+
+Messages:
+- First field `std_msgs/Header header`; the node copies the input's header.
+- `CamelCase.msg`, `snake_case` fields, a unit + frame comment on every field, SI units.
+- Named fields over fixed-size arrays. No "valid" flags: don't publish when there is nothing.
+- Changing a field breaks consumers: update them in the same PR.
+
+Node code:
+- One node = one job. A service may have more than one node if each has its own job.
+- Logic in plain functions or classes with no ROS calls inside, so it is unit-testable without ROS (Python: `@staticmethod` / module functions; C++: free functions or a plain class in a header).
+- Every tunable value is a ROS parameter with a default, read in the constructor. Env vars only as a parameter default.
+- Fixed values as named constants (Python `UPPER_CASE`, C++ `constexpr kName`).
+- Sensor inputs: sensor-data QoS (`qos_profile_sensor_data` / `rclcpp::SensorDataQoS()`). Outputs: reliable, depth 10, under `/<name>/`.
+- External calls (Triton, MAVSDK, services) behind one method or interface so tests can replace it; on failure log with throttling and skip or fail safe, never crash.
+- Output messages copy the input header when they describe that input.
+- One startup log line with the effective config; no per-message info logs.
+- Clean shutdown on Ctrl+C (Python: `try`/`except KeyboardInterrupt`/`finally: destroy_node(); shutdown()`; C++: stop timers/offboard, then `rclcpp::shutdown()`).
+- Python: `float()`/`int()` numpy scalars before putting them in a message. Lines ≤ 99 chars.
+- NEVER `sleep` or block in callbacks. NEVER load ML model weights in a node (use Triton).
+
+Packaging and container:
+- Every launch file is installed (Python: `setup.py` `data_files`; C++: `install(DIRECTORY launch ...)`).
+- `package.xml`: real description and maintainer (not `root`/`TODO`), `depend` for ROS imports, `exec_depend` for runtime-only deps; pip-only deps get an XML comment.
+- `.devcontainer/post-create.sh`: symlink both packages into `/opt/ros2_ws/src`, add them to `colcon build --packages-select`, add one alias for the launch file. Remove aliases for deleted scripts in the same change.
+- Only GUI commands get `vglrun` in `spark/post-create.sh`.
+- README in the node package: topics table, parameters table, run and test commands.
+
+## AI inference (Triton) — for any service that runs a model
+
+Today only Perception uses it; any service that adds a model follows the same rules (its own
+model in `infra/triton/model_repository/<model>/`).
+
+- Server: one shared `tritonserver` on the Spark (`infra/triton/docker-compose.yml`), reached at `triton:8001` (gRPC) on the `halo-inference` network. Run by the Spark admin, not per developer.
+- Existing model `yolo_person`: TensorRT plan built ON the Spark by `infra/triton/build_engine.sh` (`.plan` files are GPU-specific and NEVER committed). `max_batch_size` 8, dynamic batching.
+- I/O from `config.pbtxt`: input `images` FP32 `[3,640,640]`; output `output0` FP32 `[84,8400]` = 4 box values (cx, cy, w, h in 640 letterbox pixels) + 80 COCO class scores; person = class 0 = row 4.
+- Preprocessing must match how the model was trained. For `yolo_person`: letterbox to 640x640 (scale = min(640/w, 640/h), centered, pad value 114), BGR→RGB, HWC→CHW, float32 / 255, add batch dim, `np.ascontiguousarray`.
+- Postprocessing: subtract padding, divide by scale, clip to frame. Single best person = `argmax` of row 4 (no NMS needed). Multiple people = threshold + `cv2.dnn.NMSBoxes` (IoU 0.7).
+- Always pass `client_timeout` to `infer`.
+- Client and server must come from the same Triton release (`TRITON_TAG`, default 25.09). On ARM, `tritonclient` comes from the SDK image wheel, not plain pip.
+
+## Tests and CI
+
+- Tests MUST run with no sim, GPU or Triton.
+- Two layers per service:
+  - Logic tests: the pure functions, parametrized over input shapes, with edge cases (exact thresholds, limits/clipping, multiple candidates, nothing found, round trips). Python: pytest. C++: gtest via `ament_cmake_gtest`.
+  - Node tests: a real node with the external call and publisher faked. Check header copied, values, nothing published when nothing found, failures don't crash, parameter defaults.
+- Motion code (Movement) additionally tests that every limit is enforced and that loss of target or connection leads to a safe stop.
+- CI: one workflow per service, `.github/workflows/<name>-tests.yml`, in a plain `ros:jazzy` container, filtered to that service's paths. `perception-tests.yml` is an existing example of the format.
+- NEVER skip, delete or weaken a test to make CI pass.
+- The C++ code in `Src/` and `Include/` has no tests or CI yet.
+
+## Safety and hardware readiness
+
+Today everything runs in SITL, but the same code will later run against a flight controller in
+HITL and on real hardware. Write it so that switch is a configuration change, not a rewrite.
+
+- Connection endpoints (MAVSDK URL, MAVLink host/port), topic names, and camera parameters MUST be
+  ROS parameters or CLI arguments with the SITL values as defaults. NEVER hardcode `udpin://0.0.0.0:14540`
+  or `/world/default/...` inside logic.
+- Sim-only helpers (spawn scripts, Gazebo bridges, `gz` calls, `/world/...` services) stay in
+  `scripts/`, launch files, or a package's `scripts/`. NEVER call them from any service's node code.
+- Read camera size and intrinsics from `camera_info` / the image itself, not from constants matching
+  the Gazebo camera (1920x1080, 15 Hz).
+- Use the message header stamp (or ROS time) for timing, never wall-clock assumptions about sim speed.
+- Every motion command MUST be bounded: speed, yaw rate, offset, and follow-distance limits as named
+  constants or parameters, enforced in code.
+- Every offboard / motion program MUST stop and return PX4 to Hold on exit, Ctrl+C, timeout, lost
+  target, or lost connection (see `OffboardGuard` in `move.cpp`).
+- NEVER arm, take off, or command motion automatically unless that program's documented purpose is
+  to do so (today only `move --follow-person`). Others assume a human armed the vehicle.
+- An agent MUST NOT run anything against a real vehicle or flight controller, or change code paths
+  meant for one, without explicit instruction from a human in the current task.
+
+## Notes on the current C++ code (`Src/`, `Include/`)
+
+- C++17, MAVSDK + rclcpp + Eigen. Each executable is its own `add_executable` in the root `CMakeLists.txt`.
+- `main` runs the old tracking nodes (`TargetKalmanFilterNode`, `TrackAndCenterNode`) in one `MultiThreadedExecutor`. All of this is to be replaced by the Tracking and Movement services.
+- Offboard control returns PX4 to Hold on exit, timeout or Ctrl+C (see `OffboardGuard` in `move.cpp`).
+- Follow-distance sign in `follow_person.cpp`: `distance_error = distance_m - safe_distance` (positive = too far = move forward).
+
+## Before finishing any change
+
+- [ ] Builds: colcon for ROS packages, cmake for `Src/`
+- [ ] Tests pass for every touched service
+- [ ] Consumers of any changed topic or message are updated (see "Known broken or stale")
+- [ ] Aliases, scripts, launch files and READMEs that reference renamed or deleted files are updated
+- [ ] No debug logs, hardcoded values, or unused generated files left behind
+- [ ] Nothing new is hardcoded to SITL (endpoints, world names, camera size); motion stays bounded and fails safe
+
+## Open questions
+
+Ask the owner before deciding any of these in code.
+
+General
+- Should the WSL profile get `tritonclient` and a Triton endpoint, or are model-using services Spark-only?
+- Exact package and topic names for Geolocation, Tracking, Movement and UI (pattern above).
+
+Geolocation and Tracking (Brooks)
+- What the ECEF error triplet means (per-axis 1-sigma, radius, other) and the `.msg` field names.
+- How perception data feeds the drone's own position estimate in Geolocation.
+
+Movement (Lisa)
+- Datatype for movement commands (current idea: "functions").
+- How the MAVLink goto command works (e.g. MAVSDK `goto_location` / `MAV_CMD_DO_REPOSITION`); needs research.
+- Follow distance and circling radius around the POI.
+
+UI/UX web endpoint (Kean)
+- What the bridge node sends (which fields, how often) and HTTP vs WebSocket.
+- Whether a database is needed.
