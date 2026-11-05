@@ -88,3 +88,19 @@ def test_triton_failure_skips_frame(node):
     node._infer = broken_infer
     node.on_image(camera_image())          # must not raise
     node.pub.publish.assert_not_called()
+
+
+def test_parameters_have_documented_defaults(node):
+    """Every setting is a ROS parameter with the default the README documents."""
+    assert node.get_parameter("triton_url").value == "localhost:8001"   # from HALO_TRITON_URL
+    assert node.get_parameter("model_name").value == "yolo_person"
+    assert node.get_parameter("min_confidence").value == pytest.approx(0.5)
+    assert node.get_parameter("triton_timeout_s").value == pytest.approx(0.1)
+
+
+def test_min_confidence_parameter_is_used(node):
+    """Raising min_confidence above the score suppresses the detection."""
+    node.min_confidence = 0.95
+    node._infer = lambda blob: fake_output(0.9)
+    node.on_image(camera_image())
+    node.pub.publish.assert_not_called()

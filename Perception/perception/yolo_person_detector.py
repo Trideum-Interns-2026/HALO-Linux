@@ -3,6 +3,13 @@
 Subscribes to the drone's camera, sends each frame to the shared Triton
 YOLO server, and publishes the most confident person as a
 perception_msgs/Detection.
+
+Topics
+    in   /camera/front/image_raw   sensor_msgs/Image (sensor-data QoS)
+    out  /perception/detection     perception_msgs/Detection (only when a person is seen)
+
+Parameters (all optional, see declare_parameter below for defaults)
+    triton_url, model_name, min_confidence, triton_timeout_s
 """
 
 import os
@@ -13,13 +20,14 @@ import rclpy
 import tritonclient.grpc as grpcclient
 from cv_bridge import CvBridge
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from tritonclient.utils import InferenceServerException
 
 from perception_msgs.msg import Detection
 
 INPUT_SIZE = 640        # fixed by config.pbtxt: dims [3, 640, 640]
-MIN_CONFIDENCE = 0.5    # below this, a frame counts as "no person"
+MIN_CONFIDENCE = 0.5    # default threshold; below it a frame counts as "no person"
 PERSON_ROW = 4          # rows 0-3 = box, then 80 class scores; person is class 0
 
 
@@ -28,16 +36,30 @@ class YoloPersonDetector(Node):
 
     def __init__(self):
         super().__init__("yolo_person_detector")
+
+        # Settings come from ROS parameters so they can change per launch
+        # without editing code. Triton's URL defaults to the container's env var.
+        self.triton_url = self.declare_parameter(
+            "triton_url", os.environ.get("HALO_TRITON_URL", "triton:8001")).value
+        self.model_name = self.declare_parameter("model_name", "yolo_person").value
+        self.min_confidence = self.declare_parameter("min_confidence", MIN_CONFIDENCE).value
+        self.triton_timeout_s = self.declare_parameter("triton_timeout_s", 0.1).value
+
         # Converts ROS Image <-> numpy; made once, reused every frame
         self.bridge = CvBridge()
-        # Shared Triton server, e.g. triton:8001
-        self.triton = grpcclient.InferenceServerClient(url=os.environ["HALO_TRITON_URL"])
-        # Input: Gazebo's camera reaches this topic through ros_gz_bridge,
-        # which must be running
+        # gRPC client for the shared Triton server (connects on first infer)
+        self.triton = grpcclient.InferenceServerClient(url=self.triton_url)
+
+        # Input: camera frames. Sensor-data QoS (best effort, small queue)
+        # drops stale frames instead of building up lag.
         self.sub = self.create_subscription(
-            Image, "/camera/front/image_raw", self.on_image, 10)
+            Image, "/camera/front/image_raw", self.on_image, qos_profile_sensor_data)
         # Output: one Detection per frame that contains a person
         self.pub = self.create_publisher(Detection, "/perception/detection", 10)
+
+        self.get_logger().info(
+            f"Ready: triton={self.triton_url} model={self.model_name} "
+            f"min_confidence={self.min_confidence} timeout={self.triton_timeout_s}s")
 
     def on_image(self, msg):
         """Handle one camera frame: run YOLO and publish the best person, if any."""
@@ -47,11 +69,11 @@ class YoloPersonDetector(Node):
             raw = self._infer(blob)
         except InferenceServerException as e:
             # Triton slow or down: skip this frame instead of crashing the node
-            self.get_logger().warn(f"Triton inference failed, skipping frame: {e}",
-                                    throttle_duration_sec=5.0)
+            self.get_logger().warn(
+                f"Triton inference failed, skipping frame: {e}", throttle_duration_sec=5.0)
             return
         fh, fw = frame.shape[:2]
-        det = self._decode(raw, scale, pad_x, pad_y, fw, fh)
+        det = self._decode(raw, scale, pad_x, pad_y, fw, fh, self.min_confidence)
         if det is None:
             return                           # no person -> publish nothing
 
@@ -74,17 +96,18 @@ class YoloPersonDetector(Node):
         """
         size = INPUT_SIZE
         fh, fw = frame.shape[:2]
-        scale = min(size / fw, size / fh)            # smaller ratio, so both sides fit without distortion
+        scale = min(size / fw, size / fh)        # smaller ratio: both sides fit, no distortion
         nw, nh = int(round(fw * scale)), int(round(fh * scale))
-        pad_x = (size - nw) // 2                     # center the image; one of these is always 0
+        pad_x = (size - nw) // 2                 # center the image; one of these is always 0
         pad_y = (size - nh) // 2
-        resized = cv2.resize(frame, (nw, nh))        # note: resize takes (width, height)
-        canvas = np.full((size, size, 3), 114, dtype=np.uint8)   # 114 = grey padding YOLO was trained with
+        resized = cv2.resize(frame, (nw, nh))    # note: resize takes (width, height)
+        # 114 = the grey padding YOLO was trained with
+        canvas = np.full((size, size, 3), 114, dtype=np.uint8)
         canvas[pad_y:pad_y + nh, pad_x:pad_x + nw] = resized
-        blob = canvas[:, :, ::-1]                    # BGR -> RGB: model trained on RGB
-        blob = blob.transpose(2, 0, 1)               # HWC -> CHW: model wants channels first
-        blob = blob.astype(np.float32) / 255.0       # 0-255 -> 0.0-1.0
-        blob = blob[None]                            # add batch dimension -> (1, 3, 640, 640)
+        blob = canvas[:, :, ::-1]                # BGR -> RGB: model trained on RGB
+        blob = blob.transpose(2, 0, 1)           # HWC -> CHW: model wants channels first
+        blob = blob.astype(np.float32) / 255.0   # 0-255 -> 0.0-1.0
+        blob = blob[None]                        # add batch dimension -> (1, 3, 640, 640)
         return np.ascontiguousarray(blob), scale, (pad_x, pad_y)
 
     def _infer(self, blob):
@@ -92,11 +115,12 @@ class YoloPersonDetector(Node):
         inp = grpcclient.InferInput("images", list(blob.shape), "FP32")
         inp.set_data_from_numpy(blob)
         out = grpcclient.InferRequestedOutput("output0")
-        result = self.triton.infer("yolo_person", [inp], outputs=[out], client_timeout=0.1)
-        return result.as_numpy("output0")            # (1, 84, 8400)
+        result = self.triton.infer(
+            self.model_name, [inp], outputs=[out], client_timeout=self.triton_timeout_s)
+        return result.as_numpy("output0")        # (1, 84, 8400)
 
     @staticmethod
-    def _decode(raw, scale, pad_x, pad_y, fw, fh):
+    def _decode(raw, scale, pad_x, pad_y, fw, fh, min_confidence=MIN_CONFIDENCE):
         """Pick the most confident person box and map it back to frame pixels.
 
         Returns (conf, x_min, y_min, x_max, y_max), or None if no person.
@@ -105,7 +129,7 @@ class YoloPersonDetector(Node):
         scores = preds[PERSON_ROW]        # person score for all 8400 guesses
         best = int(np.argmax(scores))     # index of the single most confident guess
         conf = float(scores[best])
-        if conf < MIN_CONFIDENCE:         # nobody confidently there -> no detection
+        if conf < min_confidence:         # nobody confidently there -> no detection
             return None
         cx, cy, w, h = preds[0:4, best]   # box center + size, in 640x640 letterbox pixels
         # Undo the letterbox: remove the padding, then undo the resize
