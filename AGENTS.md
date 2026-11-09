@@ -17,7 +17,7 @@ interface and tests, and no one service is the template or the priority. The rul
 | Perception | Cohen | Find a person in camera images | camera image (ROS 2) | `perception_msgs/Detection`: header, confidence, bounding box in pixels | `Perception/`, `perception_msgs/` (done) |
 | Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | header + LLA position + error (see "Position output format") | none yet |
 | Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | same format as Geolocation | old code in `Include/Tracking/`, `Src/main.cpp` (to be replaced) |
-| Movement | Lisa | Follow the POI: go to a set distance from it, circle it, keep it centered | POI position (ROS 2) | vehicle motion only, sent as MAVLink goto commands (not ROS) | old code in `Src/move.cpp`, `Src/follow_person.cpp`, `track_and_center.hpp` (to be replaced) |
+| Movement | Lisa | Follow the POI: go to a set distance from it, circle it, keep it centered | POI position (ROS 2) | vehicle motion only, sent as MAVLink goto commands (not ROS) | `Movement/` (goto logic + node done; POI input waits on Tracking), old `Src/move.cpp` waypoint test, `track_and_center.hpp` (to be replaced) |
 | UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | `Include/Groundstation/mavlink_interface.hpp` (ROI to QGC); no web code yet |
 
 Design decisions already made:
@@ -62,18 +62,19 @@ the owner before creating a package.
 
 | Path | What it is |
 | --- | --- |
-| `Src/` | C++ executables: `main.cpp` (tracking: Kalman + centering), `move.cpp` (waypoint test), `follow_person.cpp` (autonomous follow) |
+| `Src/` | C++ executables: `main.cpp` (tracking: Kalman + centering), `move.cpp` (waypoint test) |
 | `Include/Tracking/` | `target_kalman_filter.hpp`, `track_and_center.hpp` (ROS 2 nodes used by `main`) |
 | `Include/Groundstation/` | `mavlink_interface.hpp` (raw MAVLink UDP sender for ROI commands) |
 | `CMakeLists.txt`, `package.xml` (root) | Build for the C++ code above (plain CMake, built by `scripts/*`, NOT colcon) |
 | `Perception/`, `perception_msgs/` | Perception service: node package + interface package |
-| `scripts/` | `fly` (start sim), `track`, `move`, `follow_person`, `spark/verify.sh` |
+| `Movement/` | Movement service (C++, ament_cmake): goto logic, MAVSDK adapter, node, tests |
+| `scripts/` | `fly` (start sim), `track`, `move`, `spark/verify.sh` |
 | `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
 | `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
 | `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
 | `Dockerfile`, `docker-compose*.yml` | Base image (`px4io/px4-sitl-gazebo-ros2`) and compose overrides (`.wsl`, `.spark`) |
 | `docs/spark/README.md` | Full Spark setup + QGroundControl over TCP |
-| `.github/workflows/` | CI (`perception-tests.yml`) |
+| `.github/workflows/` | CI (`perception-tests.yml`, `movement-tests.yml`) |
 
 ## Environments
 
@@ -102,6 +103,7 @@ Facts that cause bugs if forgotten:
 fly                       # terminal 1: PX4 SITL + Gazebo (waits until /world/default/create exists)
 HEADLESS=1 fly            # same, no Gazebo window
 perceive                  # terminal 2: camera bridge + YOLO detector (ros2 launch perception perception.launch.py)
+movement                  # movement service (ros2 launch movement movement.launch.py); needs an armed, airborne vehicle
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
 track                     # tracking (builds + runs build/main)
 ./scripts/move <n_m> <e_m>   # short waypoint test, |offset| <= 2 m, vehicle must already be airborne
@@ -110,7 +112,7 @@ track                     # tracking (builds + runs build/main)
 cd /opt/ros2_ws && colcon build --packages-select <pkg>_msgs <pkg> --symlink-install && source install/setup.bash
 
 # C++ in the root project (Src/)
-cmake -S /workspace -B /workspace/build && cmake --build /workspace/build --target <main|move|follow_person>
+cmake -S /workspace -B /workspace/build && cmake --build /workspace/build --target <main|move>
 
 # tests for any ROS 2 package
 cd /opt/ros2_ws && colcon test --packages-select <pkg>_msgs <pkg> && colcon test-result --verbose
@@ -125,7 +127,7 @@ gz topic -l | grep image
 
 - NEVER run `colcon build` in `/workspace`: the root `package.xml` makes colcon see the wrong package.
 - Python edits in an ament_python package need no rebuild (`--symlink-install`); restart the node. New files, `setup.py`, `package.xml`, `CMakeLists.txt`, `.msg` or any C++ change need a rebuild.
-- `fly`, `track` and `move` do NOT arm or take off (except `move --follow-person`). Arm and take off in QGroundControl first.
+- `fly`, `track`, `move` and `movement` do NOT arm or take off. Arm and take off in QGroundControl first.
 - MAVSDK connects on `udpin://0.0.0.0:14540`. Ground-station MAVLink on UDP 14550.
 
 ## Data flow between services
@@ -159,10 +161,8 @@ The perception interface changed: the old package published `geometry_msgs/Point
 `/<detector>/<target>/position` and `std_msgs/Float32` on `.../distance`; the new one publishes
 `Detection` on `/perception/detection`. These still expect the old interface:
 
-- `Src/follow_person.cpp`: subscribes to `/yolo_person_detector/person/position` and `/distance`.
 - `Include/Tracking/track_and_center.hpp`, `target_kalman_filter.hpp`: default to `/red_sphere_detector/red_sphere/*`.
 - `scripts/track`: passes red-sphere / `person_detector` topics via `PERCEIVE_TARGET`.
-- `scripts/move --follow-person`: launches the deleted `yolo_person_detection.launch.py`.
 - `Detection` has no distance, by design: ranging belongs inside Tracking (e.g. pinhole `height_m * fy / box_height_px` from `camera_info`, test person 1.9 m, with height spread folded into the error).
 
 The C++ items above are being replaced by the new services; only patch them if a task needs the old demo working in the meantime. When fixing one, update every file the change touches in the same PR.
@@ -250,9 +250,9 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
 - Every motion command MUST be bounded: speed, yaw rate, offset, and follow-distance limits as named
   constants or parameters, enforced in code.
 - Every offboard / motion program MUST stop and return PX4 to Hold on exit, Ctrl+C, timeout, lost
-  target, or lost connection (see `OffboardGuard` in `move.cpp`).
+  target, or lost connection (see `OffboardGuard` in `move.cpp`; `Movement/` holds via `MovementNode::shutdown`).
 - NEVER arm, take off, or command motion automatically unless that program's documented purpose is
-  to do so (today only `move --follow-person`). Others assume a human armed the vehicle.
+  to do so (today no program does). Programs assume a human armed the vehicle.
 - An agent MUST NOT run anything against a real vehicle or flight controller, or change code paths
   meant for one, without explicit instruction from a human in the current task.
 
@@ -261,7 +261,6 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
 - C++17, MAVSDK + rclcpp + Eigen. Each executable is its own `add_executable` in the root `CMakeLists.txt`.
 - `main` runs the old tracking nodes (`TargetKalmanFilterNode`, `TrackAndCenterNode`) in one `MultiThreadedExecutor`. All of this is to be replaced by the Tracking and Movement services.
 - Offboard control returns PX4 to Hold on exit, timeout or Ctrl+C (see `OffboardGuard` in `move.cpp`).
-- Follow-distance sign in `follow_person.cpp`: `distance_error = distance_m - safe_distance` (positive = too far = move forward).
 
 ## Before finishing any change
 
