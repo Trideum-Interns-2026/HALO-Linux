@@ -1,42 +1,19 @@
+"""Start the camera bridge and the YOLO person detector together."""
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    image_topic_arg = DeclareLaunchArgument(
-        "image_topic",
-        # The gazebo_ros camera plugin publishes under
-        # <namespace>/<camera_name>/image_raw — with namespace "/camera" and
-        # camera_name "front" that's /camera/front/image_raw, not
-        # /camera/image_raw.
-        default_value="/camera/front/image_raw",
-        description="Camera image topic to subscribe to",
-    )
-    publish_debug_image_arg = DeclareLaunchArgument(
-        "publish_debug_image",
-        default_value="true",
-        description="Publish annotated and mask debug images",
-    )
-
-    return LaunchDescription(
-        [
-            image_topic_arg,
-            publish_debug_image_arg,
-            Node(
-                package="perception",
-                executable="red_sphere_detector",
-                name="red_sphere_detector",
-                output="screen",
-                parameters=[
-                    {"image_topic": LaunchConfiguration("image_topic")},
-                    {"min_contour_area": 150.0},
-                    {
-                        "publish_debug_image":
-                            LaunchConfiguration("publish_debug_image")
-                    },
-                ],
-            ),
-        ]
-    )
+    launch_dir = os.path.join(get_package_share_directory("perception"), "launch")
+    return LaunchDescription([
+        # Gazebo camera -> /camera/front/image_raw (auto-detects the gz topic)
+        IncludeLaunchDescription(PythonLaunchDescriptionSource(
+            os.path.join(launch_dir, "gz_harmonic_bridge.launch.py"))),
+        # Your node: /camera/front/image_raw -> /perception/detection
+        Node(package="perception", executable="yolo_person_detector", output="screen"),
+    ])

@@ -4,6 +4,7 @@ project(halo LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(MAVSDK REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -36,6 +37,24 @@ ament_target_dependencies(tracking
     std_msgs
 )
 target_link_libraries(tracking Eigen3::Eigen)
+
+add_executable(move ${CMAKE_SOURCE_DIR}/Src/move.cpp)
+target_link_libraries(move MAVSDK::mavsdk)
+
+add_executable(follow_person ${CMAKE_SOURCE_DIR}/Src/follow_person.cpp)
+target_include_directories(follow_person PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/Include
+    /usr/include/mavsdk
+    /usr/local/include/mavsdk
+)
+ament_target_dependencies(follow_person
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    std_msgs
+)
+target_link_libraries(follow_person Eigen3::Eigen MAVSDK::mavsdk)
 
 include(CTest)
 if(BUILD_TESTING)

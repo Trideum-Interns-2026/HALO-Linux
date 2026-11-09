@@ -5,8 +5,9 @@ source /opt/ros/jazzy/setup.bash
 
 if [ -d /workspace/Perception ]; then
     mkdir -p /opt/ros2_ws/src
+    ln -sfn /workspace/perception_msgs /opt/ros2_ws/src/perception_msgs
     ln -sfn /workspace/Perception /opt/ros2_ws/src/Perception
-    (cd /opt/ros2_ws && colcon build --packages-select perception --symlink-install)
+    (cd /opt/ros2_ws && colcon build --packages-select perception_msgs perception --symlink-install)
 fi
 
 ln -sfn /workspace/Tracking/scripts/tracking /usr/local/bin/tracking
@@ -44,17 +45,17 @@ grep -q "ros2_ws/install/setup.bash" /etc/bash.bashrc || \
 # setup so gz-tools can still find those verbs.
 grep -q "GZ_CONFIG_PATH" /etc/bash.bashrc || \
     echo 'export GZ_CONFIG_PATH="${GZ_CONFIG_PATH}:/usr/share/gz"' >> /etc/bash.bashrc
-grep -q "alias spawn_sphere=" /etc/bash.bashrc || \
-    echo "alias spawn_sphere='/workspace/Perception/scripts/spawn_sphere.sh'" >> /etc/bash.bashrc
+# Drop aliases for scripts that no longer exist, and the old `perceive`
+# (it ran the deleted demo script), so they can't linger in a reused container.
+sed -i '/^alias spawn_sphere=/d; /^alias perceive=/d' /etc/bash.bashrc
 grep -q "alias spawn_person=" /etc/bash.bashrc || \
     echo "alias spawn_person='/workspace/Perception/scripts/spawn_person.sh'" >> /etc/bash.bashrc
-grep -q "alias perceive=" /etc/bash.bashrc || \
-    echo "alias perceive='/workspace/Perception/scripts/run_perception_demo.sh'" >> /etc/bash.bashrc
-sed -i '/^alias track=/d' /etc/bash.bashrc
+# Drop aliases for scripts that no longer exist.
+sed -i '/^alias spawn_sphere=/d; /^alias perceive=/d; /^alias track=/d' /etc/bash.bashrc
+# `perceive` starts the camera bridge and YOLO detector (publishes /perception/detection).
+echo "alias perceive='ros2 launch perception perception.launch.py'" >> /etc/bash.bashrc
 sed -i '/^alias gps=/d' /etc/bash.bashrc
 sed -i '/^alias tracking=/d' /etc/bash.bashrc
 sed -i '/^alias geolocation=/d' /etc/bash.bashrc
-grep -q "alias tracking=" /etc/bash.bashrc || \
-    echo "alias tracking='/workspace/scripts/tracking'" >> /etc/bash.bashrc
-grep -q "alias geolocation=" /etc/bash.bashrc || \
-    echo "alias geolocation='/workspace/scripts/geolocation'" >> /etc/bash.bashrc
+echo "alias tracking='/workspace/Tracking/scripts/tracking'" >> /etc/bash.bashrc
+echo "alias geolocation='/workspace/Geolocation/scripts/geolocation'" >> /etc/bash.bashrc

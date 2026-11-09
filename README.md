@@ -1,199 +1,93 @@
-HALO
-Repo for the HALO drone project
+# HALO
 
-Officers often face dangerous situations where human lives are at risk. To assist the police department, we will use a drone to allow officers to monitor areas that could be dangerous for a person. Our goal is to design and test a drone system within budget, capable of safely assisting the Police Department with target pursuit operations and surveillance through QGroundControl simulation algorithms.
+HALO is a police-support drone, developed in simulation: PX4 SITL + Gazebo Harmonic +
+ROS 2 Jazzy, controlled over MAVSDK/MAVLink and monitored in QGroundControl.
 
+Officers often face dangerous situations where human lives are at risk. HALO lets officers
+monitor and pursue targets in areas that could be dangerous for a person, with a drone system
+designed and tested within budget.
 
-# Prerequisites
-Docker
-WSL2
-Ubuntu
-ROS 2 jazzy
-QGroundControl
+The system is split into microservices, each with its own owner, interface and tests.
+**Read [AGENTS.md](AGENTS.md) for the architecture, service table, rules and data flow.**
 
-# Running C++ programs
-From the repository root, run:
+| Service | Job | Code |
+| --- | --- | --- |
+| Perception | Find a person in camera images, publish `perception_msgs/Detection` | [Perception/](Perception/README.md), `perception_msgs/` |
+| Geolocation | Estimate the drone's own position | C++ prototype in `Geolocation/` |
+| Tracking | Estimate the person's position | C++ prototype in `Tracking/` |
+| Movement | Follow the person, commanded over MAVLink | Older C++ programs in `Src/` |
+| UI/UX | Web view of the drone's data through a ROS bridge node | Not started |
 
-```powershell
-python run_all.py <folder> <file.cpp>
+## Prerequisites
+
+Docker, WSL2 (Ubuntu), QGroundControl. Code runs inside a dev container
+(ROS 2 Jazzy, PX4 SITL, Gazebo Harmonic); the repo is mounted at `/workspace`.
+
+- Windows / WSL2: [Windows-Setup-Repo-to-Gazebo.md](Windows-Setup-Repo-to-Gazebo.md),
+  and [PX4-SITL-Docker-Troubleshooting.md](PX4-SITL-Docker-Troubleshooting.md) if the sim misbehaves.
+- DGX Spark (ARM64, shared host, required for anything that calls Triton):
+  [docs/spark/README.md](docs/spark/README.md), including QGroundControl over TCP
+  ([section 7](docs/spark/README.md#7-developer-qgroundcontrol-on-your-laptop)).
+
+## Running the simulation
+
+1. Open QGroundControl.
+2. Terminal 1: `fly` starts PX4 SITL and Gazebo (`HEADLESS=1 fly` for no window). Leave it running.
+3. Terminal 2: `perceive` starts the camera bridge and the YOLO detector (Spark profile only,
+   it needs Triton). Detections appear on `/perception/detection`.
+4. Optional: `spawn_person [x] [y] [yaw]` adds a test target (default 5 m ahead, facing the drone).
+5. Arm and take off in QGroundControl. `fly`, `tracking`, `geolocation` and `move` do not arm or
+   take off.
+
+Check the output with `ros2 topic echo /perception/detection`.
+
+### Older tracking and movement programs
+
+These programs are being replaced by the Tracking and Movement services and are partly out of date
+(see "Known broken or stale" in [AGENTS.md](AGENTS.md)). They are for SITL only, never a real vehicle.
+
+```bash
+./scripts/move <north_m> <east_m>   # short waypoint test, each offset <= 2 m, vehicle must be airborne
 ```
 
-For example:
+`move` holds altitude, never arms, takes off or lands, and returns PX4 to Hold when it finishes,
+times out or is interrupted. The old `follow_person` path still expects perception topics that the
+current Perception service no longer publishes.
 
-```powershell
-python run_all.py Src takeoff_forward_back.cpp
+## Building and testing
+
+```bash
+# ROS 2 Perception packages (workspace is /opt/ros2_ws; never run colcon in /workspace)
+cd /opt/ros2_ws && colcon build --packages-select perception_msgs perception --symlink-install
+source install/setup.bash
+
+# Perception tests, no sim, GPU or Triton needed
+cd /workspace/Perception && python3 -m pytest test/ -v
+
+# C++ programs and the Geolocation unit test
+cmake -S /workspace -B /workspace/build
+cmake --build /workspace/build --target geolocation tracking move follow_person drone_gps_kalman_filter_test
+ctest --test-dir /workspace/build --output-on-failure
 ```
-The search is recursive, so only the first folder is required.
 
+CI runs each service's tests on push: `.github/workflows/`.
 
-# Perception (vision system)
+## Repo layout
 
-`Perception/` is a ROS 2 (ament_python) package that finds a person in the
-drone's camera feed with YOLOv8n and estimates how far away they are. That's
-what the demo runs; `perceive` and `track` use it by default.
+| Path | What it is |
+| --- | --- |
+| `Perception/`, `perception_msgs/` | Perception service and its message package |
+| `Geolocation/`, `Tracking/` | C++ drone and target position prototypes |
+| `Src/` | Older C++ movement and follow programs |
+| `scripts/` | `fly`, `move`, `follow_person`, `spark/verify.sh` |
+| `infra/triton/` | Shared Triton Inference Server config and engine build script |
+| `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
+| `.devcontainer/`, `Dockerfile`, `docker-compose*.yml` | Dev container profiles (WSL2 and Spark) |
+| `docs/spark/` | DGX Spark setup guide |
 
-- The camera feed comes from the `gz_x500_depth` vehicle's OakD-Lite color
-  camera (1920x1080, capped at 15 Hz by the Dockerfile), bridged from Gazebo
-  Harmonic to ROS 2 via `ros_gz_bridge`
-  (`Perception/launch/gz_harmonic_bridge.launch.py`) onto
-  `/camera/front/image_raw` and `/camera/front/camera_info`. The bridge finds
-  the camera's Gazebo topic in whatever world is running, and the spawn
-  scripts likewise target whichever world is running, so nothing here is
-  tied to PX4's `default` world. If a world has more than one camera, pick
-  one with `ros2 launch perception gz_harmonic_bridge.launch.py
-  gz_image_topic:=<gz topic>`; export `WORLD=<name>` to override the spawn
-  scripts' world.
-- `perception/yolo_person_detector.py` runs YOLOv8n on the NVIDIA GPU (CPU if
-  PyTorch can't see one), keeps the most confident person, and publishes:
-  - pixel centroid and box height on `/yolo_person_detector/person/position`
-    (PointStamped: x=u, y=v, z=box height in px)
-  - a distance estimate in meters on `/yolo_person_detector/person/distance`
-    (pinhole model: `person_height_m` × focal length ÷ box height, with
-    `person_height_m` = 1.9m to match the test model)
-  - an annotated debug image (960x540, box + confidence + distance) on
-    `/yolo_person_detector/person/debug_image`, only drawn while something
-    is watching it
+## Docker resources
 
-  PyTorch, Ultralytics, and the model weights (`/opt/yolo/yolov8n.pt`) are
-  installed by the Dockerfile. Inference takes ~15 ms per frame on the GPU,
-  so it keeps up with the camera; if it falls behind, it skips to the newest
-  frame rather than building a backlog.
-- `Perception/models/standing_person.sdf` is a static standing human (mesh
-  from Gazebo Fuel, downloaded to `~/.gz/fuel` on first spawn — needs
-  internet once). `standing_person_marker.sdf` is the same person with a
-  0.4m red sphere on the chest, for the red sphere detector. Spawn with
-  `spawn_person [x] [y] [yaw]` (default 5 0 0, facing the drone), or
-  `MARKER=1 spawn_person` for the marked one. Spawning it removes
-  `red_sphere`, so the detectors only ever see one target.
-
-To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
-`track`:
-
-- `PERCEIVE_TARGET=yolo_person` — unmarked person, YOLO detector (default)
-- `PERCEIVE_TARGET=person` — unmarked person, `person_detector`
-- `PERCEIVE_TARGET=marked_person` — person with red marker,
-  `red_sphere_detector`
-
-## Running it
-
-1. Open QGroundControl. On the DGX Spark, connect it over TCP first; see
-   [Connecting QGroundControl on the Spark](#connecting-qgroundcontrol-on-the-spark).
-2. In a terminal in the Dev Container, run `fly`. It starts PX4 SITL and
-   Gazebo only; leave it running.
-3. In another terminal, run `perceive`. It spawns the selected test target,
-   starts the Gazebo camera bridge and detector, and opens the debug-image
-   viewer. Leave it running while tracking.
-4. In a third terminal, run `track`. It builds and runs `main`, which starts
-   the geographic Kalman tracker from
-   `Include/Tracking/target_kalman_filter.hpp`. It reads vehicle position and
-   heading from MAVSDK and publishes MAVLink position/ROI updates for the
-   filtered target; it does not control vehicle movement or arm, take off, or
-   land. Press Ctrl+C in the `track` terminal to stop tracking;
-   `fly` and `perceive` remain running until stopped in their own terminals.
-
-The default target is an unmarked person detected by YOLO. To choose a
-different detector or a marked person, set the same target selection in the
-`perceive` and `track` terminals. For example, run
-`PERCEIVE_TARGET=person perceive` and `PERCEIVE_TARGET=person track`. Use
-`PERCEIVE_TARGET=marked_person` for the person with the red chest marker.
-
-Tracking is intended for PX4/Gazebo SITL only; do not run it against a real
-vehicle. Arm and take off using QGroundControl or the PX4 SITL controls first.
-QGroundControl and the vehicle must be connected through MAVLink, and the
-tracking nodes use MAVSDK UDP `14540`.
-
-### Docker resources
-
-The Compose files do not set CPU or storage limits. `fly` runs inside the
-already-created Dev Container; it cannot allocate more CPU or disk to Docker.
-If Docker reports zero CPUs or the container exits from resource pressure,
-check Docker Desktop's WSL2 resource allocation and available host/WSL disk
-space before rerunning. Read-only checks include `docker info`,
-`docker system df`, `free -h`, and `df -h`; avoid pruning Docker data unless
-you have confirmed it is safe to remove.
-  internet once). `perceive` spawns it for you; to move it, run
-  `spawn_person [x] [y] [yaw]` (default 5 0 0, facing the drone).
-- `perception/debug_image_viewer.py` is the live viewer `perceive` opens on
-  the debug image. Use it instead of `rqt_image_view`: rqt subscribes
-  best-effort, which drops most of these large frames with this DDS setup
-  (measured ~0.6 Hz vs ~15 Hz with this viewer).
-
-## Running it
-
-1. Open QGroundControl (on the Spark: see
-   [Connecting QGroundControl on the Spark](#connecting-qgroundcontrol-on-the-spark))
-2. `fly` — launches PX4 SITL and Gazebo.
-3. In a new terminal, `perceive` — spawns the person, starts the camera
-   bridge and the YOLO detector, and opens the viewer window with the
-   bounding box. Close the window (or press q / Esc) to stop all of it.
-4. In a new terminal, `track` — runs the Kalman filter on the YOLO
-   detections and repeatedly sends the filtered target location to
-   QGroundControl as `MAV_CMD_DO_SET_ROI_LOCATION`, keeping the ROI command
-   updated while the person is visible. The same terminal displays the drone
-   and filtered target coordinates once per second.
-
-The vehicle must be connected on MAVSDK UDP `14540`. QGroundControl does not
-persistently draw arbitrary map pins for ROI commands, so use the `track`
-terminal readout for the live target latitude, longitude, altitude, and
-distance.
-
-If the view looks laggy, the `perceive` terminal says which stage is slow.
-The detector logs a line every 5 s (`camera in … Hz, processed … Hz, dropped
-… stale | inference avg … ms`) and the viewer logs `received … Hz, displayed
-… Hz`; all of them should be close to 15 Hz. The first detection after
-startup takes a few seconds while CUDA warms up.
-
-### Other detectors (not used for the demo)
-
-Earlier detectors are still in the package, selected by setting
-`PERCEIVE_TARGET` in **both** the `perceive` and `track` terminals:
-
-- `PERCEIVE_TARGET=person` — same person, OpenCV HOG (`person_detector.py`);
-  less robust to distance, pose, and angle than YOLO
-- `PERCEIVE_TARGET=marked_person` — person with a 0.4m red sphere on the
-  chest, tracked by color (`red_sphere_detector.py`)
-- `PERCEIVE_TARGET=sphere` — red test sphere on its own
-  (`red_sphere_detector.py`)
-
-## Running on the NVIDIA DGX Spark (ARM64)
-
-The Spark is a shared, headless host: each teammate connects from their
-laptop through plain SSH + VS Code Remote-SSH, opens their own clone, and
-"Reopen in Container" with the **PX4 SITL Dev Container (NVIDIA Spark)**
-profile. Gazebo streams to your browser (Selkies, GPU-encoded), QGroundControl
-runs on your laptop over a MAVLink-TCP bridge through the same SSH tunnel,
-and YOLO runs on one shared TensorRT engine behind NVIDIA Triton, so five
-people's sims don't each load their own model.
-
-Setup and day-to-day usage: [docs/spark/README.md](docs/spark/README.md).
-
-### Connecting QGroundControl on the Spark
-
-QGroundControl runs on your laptop, not in the container, so your gamepad
-works as usual. The link is different from WSL: the sim's MAVLink stays
-inside your container, and the SSH tunnel only carries TCP. The container
-serves it as a TCP stream on port 5760, and VS Code forwards that port to
-your laptop.
-
-Once, in QGroundControl on your laptop:
-
-1. Open **Application Settings → Comm Links → Add**.
-2. Set **Type** to `TCP`, **Server Address** to `127.0.0.1`, and **Port**
-   to `5760`. Use `127.0.0.1`, not `localhost`, which can resolve to IPv6
-   and miss the forward.
-3. Tick **Automatically Connect on Start** and save.
-
-Every session:
-
-1. Reopen your clone in the Spark dev container.
-2. In VS Code's **Ports** tab, check that 5760 "MAVLink → QGroundControl
-   (laptop)" is listed. If VS Code mapped it to a different local port,
-   use that port in QGroundControl.
-3. Open QGroundControl, then run `fly` in a container terminal. The
-   vehicle appears once PX4 is up.
-
-If it doesn't connect, run `cat /tmp/desktop/mavlink-bridge.log` in the
-container. A "client connected" line means QGroundControl reached the
-container. No such line means the forward or the link settings are wrong.
-`desktop` restarts the bridge. Full details and troubleshooting are in
-[section 7 of the Spark guide](docs/spark/README.md#7-developer-qgroundcontrol-on-your-laptop).
+The Compose files set no CPU or storage limits. If Docker reports zero CPUs or the container exits
+from resource pressure, check Docker Desktop's WSL2 allocation and free disk space. Read-only checks:
+`docker info`, `docker system df`, `free -h`, `df -h`. Avoid pruning Docker data unless you have
+confirmed it is safe.
