@@ -3,17 +3,24 @@
 <package format="3">
   <name>perception</name>
   <version>0.1.0</version>
-  <description>Camera-based red sphere detection for the HALO drone (Gazebo camera feed -> OpenCV).</description>
-  <maintainer email="cohen@example.com">Cohen</maintainer>
+  <description>HALO perception service: camera images in, YOLO person Detection messages out (via Triton).</description>
+  <maintainer email="cohen.hill@ascte.org">Cohen Hill</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
-  <depend>geometry_msgs</depend>
   <depend>cv_bridge</depend>
-  <depend>python3-opencv</depend>
-    <depend>ros_gz_bridge</depend>
-    <depend>std_msgs</depend>
+  <depend>perception_msgs</depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <!-- tritonclient[grpc] has no rosdep key; it is pip-installed by the Dockerfile and CI -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

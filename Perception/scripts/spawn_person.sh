@@ -1,13 +1,11 @@
 #!/bin/bash
 # Spawns (or respawns, at a new position) the standing_person test target in
-# Gazebo — a static human mesh for person_detector. With MARKER=1 it gets a
-# red chest marker instead, which red_sphere_detector tracks as-is. Same
-# gz-sim entity-factory approach as spawn_sphere.sh.
+# Gazebo — a static human mesh for the YOLO person detector, via gz-sim's
+# entity-factory service.
 #
-# Also removes red_sphere if it's in the world, since the detectors would
-# otherwise have two candidate targets to jump between.
+# Also removes a leftover red_sphere if one is in the world.
 #
-# Usage: [MARKER=1] spawn_person.sh [x] [y] [yaw]   (defaults: 5 0 0 — facing
+# Usage: spawn_person.sh [x] [y] [yaw]   (defaults: 5 0 0 — facing
 #        the drone at origin, far enough out that the whole person is in the
 #        camera's view while the drone is still on the ground)
 set -e
@@ -26,17 +24,13 @@ for NAME in red_sphere standing_person; do
         > /dev/null 2>&1 || true
 done
 
-if [ "${MARKER:-0}" = "1" ]; then
-    MODEL_FILE=/workspace/Perception/models/standing_person_marker.sdf
-else
-    MODEL_FILE=/workspace/Perception/models/standing_person.sdf
-fi
+MODEL_FILE=/workspace/Perception/models/standing_person.sdf
 
 # Half-angle quaternion for a pure yaw rotation.
 QZ=$(python3 -c "import math; print(math.sin($YAW / 2))")
 QW=$(python3 -c "import math; print(math.cos($YAW / 2))")
 
-# Longer timeout than spawn_sphere.sh: the first spawn downloads the mesh
+# Long timeout: the first spawn downloads the mesh
 # from Gazebo Fuel.
 gz service -s /world/$WORLD/create \
     --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 30000 \

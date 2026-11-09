@@ -1,36 +1,31 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 package_name = "perception"
 
 setup(
     name=package_name,
-    version="0.1.0",
-    packages=[package_name],
-        data_files=[
+    version="0.0.0",
+    packages=find_packages(exclude=["test"]),
+    data_files=[
+        # Marker file so ROS can find the package by name
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        (
-            "share/" + package_name + "/launch",
-            [
-                "launch/perception.launch.py",
-                "launch/person_detection.launch.py",
-                "launch/yolo_person_detection.launch.py",
-                "launch/gz_harmonic_bridge.launch.py",
-            ],
-        ),
+        # Launch files, so `ros2 launch perception ...` can find them
+        ("share/" + package_name + "/launch", [
+            "launch/gz_harmonic_bridge.launch.py",
+            "launch/perception.launch.py",
+        ]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Cohen",
-    maintainer_email="cohen@example.com",
-    description="Camera-based red sphere detection for the HALO drone.",
+    maintainer_email="cohen.hill@ascte.org",
+    description="YOLO person detector: camera images in, Detection messages out.",
     license="Apache-2.0",
+    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "red_sphere_detector = perception.red_sphere_detector:main",
-            "person_detector = perception.person_detector:main",
             "yolo_person_detector = perception.yolo_person_detector:main",
-            "debug_image_viewer = perception.debug_image_viewer:main",
         ],
     },
 )

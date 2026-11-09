@@ -1,292 +1,156 @@
-"""Subscribes to a camera image topic and detects a person with a YOLO
-model (Ultralytics YOLOv8n by default), filtered to the COCO "person" class.
+"""YOLO person detector node.
 
-Same publish contract as person_detector.py (HOG-based), so either can be
-picked per launch file and the tracker consumes both the same way: centroid
-+ bbox height on ~/person/position (PointStamped: x=u, y=v,
-z=bbox_height_px), a distance estimate (meters) on ~/person/distance, and an
-annotated debug image (960px wide) on ~/person/debug_image — the latter
-only while something is subscribed to it, since drawing and encoding it
-isn't free. View it with `ros2 run perception debug_image_viewer`.
+Subscribes to the drone's camera, sends each frame to the shared Triton
+YOLO server, and publishes the most confident person as a
+perception_msgs/Detection.
 
-Runs on the NVIDIA GPU when PyTorch can see one, CPU otherwise.
+Topics
+    in   /camera/front/image_raw   sensor_msgs/Image (sensor-data QoS)
+    out  /perception/detection     perception_msgs/Detection (only when a person is seen)
+
+Parameters (all optional, see declare_parameter below for defaults)
+    triton_url, model_name, min_confidence, triton_timeout_s
 """
 
-import threading
-import time
+import os
 
 import cv2
+import numpy as np
 import rclpy
-import torch
-from cv_bridge import CvBridge, CvBridgeError
-from geometry_msgs.msg import PointStamped
+import tritonclient.grpc as grpcclient
+from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.executors import ExternalShutdownException
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import Float32
-from ultralytics import YOLO
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
+from tritonclient.utils import InferenceServerException
 
-COCO_PERSON_CLASS = 0
+from perception_msgs.msg import Detection
+
+INPUT_SIZE = 640        # fixed by config.pbtxt: dims [3, 640, 640]
+MIN_CONFIDENCE = 0.5    # default threshold; below it a frame counts as "no person"
+PERSON_ROW = 4          # rows 0-3 = box, then 80 class scores; person is class 0
 
 
 class YoloPersonDetector(Node):
-    """Runs frame capture and YOLO inference on separate threads.
-
-    The ROS callback (on_image) only does the cheap cv_bridge decode and
-    hands the frame off — it never runs inference itself, so it's never
-    blocked waiting on a slow YOLO pass. A background thread takes whatever
-    the newest handed-off frame is and runs detection + publishing. The
-    handoff is a single slot, not a queue: a frame that arrives mid-inference
-    replaces the pending one, so the worker always processes the latest
-    frame instead of working through a stale backlog.
-    """
+    """ROS2 node: camera frames in, person detections out."""
 
     def __init__(self):
         super().__init__("yolo_person_detector")
 
-        self.declare_parameter("image_topic", "/camera/front/image_raw")
-        self.declare_parameter("camera_info_topic", "/camera/front/camera_info")
-        # Baked into the image by the Dockerfile, so no download at runtime.
-        self.declare_parameter("model_path", "/opt/yolo/yolov8n.pt")
-        self.declare_parameter("min_confidence", 0.5)
-        # YOLO resizes frames to this before inference. Smaller = faster but
-        # loses people who are far away.
-        self.declare_parameter("inference_size", 640)
-        # "" picks the GPU when PyTorch sees one; "cpu" or "cuda:0" to force.
-        self.declare_parameter("device", "")
-        # Real-world height of the target person, in meters — matches
-        # Perception/models/standing_person.sdf (~1.9m). YOLO's boxes fit the
-        # person tightly, so unlike HOG no margin correction is needed.
-        self.declare_parameter("person_height_m", 1.9)
-        self.declare_parameter("publish_debug_image", True)
-        # Debug images are shrunk to this width before publishing: a raw
-        # 1080p frame is ~6MB, which is most of what makes rqt_image_view
-        # lag. 0 publishes full resolution.
-        self.declare_parameter("debug_image_width", 960)
+        # Settings come from ROS parameters so they can change per launch
+        # without editing code. Triton's URL defaults to the container's env var.
+        self.triton_url = self.declare_parameter(
+            "triton_url", os.environ.get("HALO_TRITON_URL", "triton:8001")).value
+        self.model_name = self.declare_parameter("model_name", "yolo_person").value
+        self.min_confidence = self.declare_parameter("min_confidence", MIN_CONFIDENCE).value
+        self.triton_timeout_s = self.declare_parameter("triton_timeout_s", 0.1).value
 
-        image_topic = self.get_parameter("image_topic").value
-        camera_info_topic = self.get_parameter("camera_info_topic").value
-        self.min_confidence = float(self.get_parameter("min_confidence").value)
-        self.inference_size = int(self.get_parameter("inference_size").value)
-        self.person_height_m = float(self.get_parameter("person_height_m").value)
-        self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
-        self.debug_image_width = int(self.get_parameter("debug_image_width").value)
-        self.device = self.get_parameter("device").value or (
-            "cuda:0" if torch.cuda.is_available() else "cpu"
-        )
-
+        # Converts ROS Image <-> numpy; made once, reused every frame
         self.bridge = CvBridge()
-        self.focal_length_px = None  # populated once camera_info arrives
-        self.model = YOLO(self.get_parameter("model_path").value)
+        # gRPC client for the shared Triton server (connects on first infer)
+        self.triton = grpcclient.InferenceServerClient(url=self.triton_url)
 
-        # Only the newest frame matters for a live tracker, so depth 1 — but
-        # RELIABLE, not BEST_EFFORT. A 1080p frame is ~6MB, which Fast DDS
-        # splits into ~100 fragments; best-effort loses the whole frame if
-        # any one fragment is dropped, and measured in the sim that cut a
-        # 15 Hz camera to ~2 Hz with multi-second gaps. Reliable repairs lost
-        # fragments, and KEEP_LAST 1 still means a slow reader only ever
-        # gets the newest frame, never a backlog. The same profile is used
-        # for the debug image publishers, for the same reasons.
-        image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-        )
-        self.image_sub = self.create_subscription(Image, image_topic, self.on_image, image_qos)
-        self.camera_info_sub = self.create_subscription(
-            CameraInfo, camera_info_topic, self.on_camera_info, 10
-        )
-        self.position_pub = self.create_publisher(PointStamped, "~/person/position", 10)
-        self.distance_pub = self.create_publisher(Float32, "~/person/distance", 10)
-        self.debug_image_pub = (
-            self.create_publisher(Image, "~/person/debug_image", image_qos)
-            if self.publish_debug_image
-            else None
-        )
-
-        # Single-slot handoff between the ROS callback thread (producer) and
-        # the inference worker thread (consumer). The condition guards both
-        # the slot and the shutdown flag.
-        self._cond = threading.Condition()
-        self._pending = None  # (frame, header) or None
-        self._shutdown = False
-        self._worker = threading.Thread(target=self._inference_loop, daemon=True)
-        self._worker.start()
-
-        # Pipeline stats, logged every few seconds so a slow stage shows up
-        # in the node's output: frames received from the camera, frames
-        # replaced in the slot before the worker got to them, frames
-        # processed, and time spent in inference / debug-image publishing.
-        # Guarded by self._cond.
-        self._stats = self._empty_stats()
-        self.create_timer(5.0, self._log_stats)
+        # Input: camera frames. Sensor-data QoS (best effort, small queue)
+        # drops stale frames instead of building up lag.
+        self.sub = self.create_subscription(
+            Image, "/camera/front/image_raw", self.on_image, qos_profile_sensor_data)
+        # Output: one Detection per frame that contains a person
+        self.pub = self.create_publisher(Detection, "/perception/detection", 10)
 
         self.get_logger().info(
-            f"Subscribed to '{image_topic}' for YOLO person detection on {self.device}"
-        )
+            f"Ready: triton={self.triton_url} model={self.model_name} "
+            f"min_confidence={self.min_confidence} timeout={self.triton_timeout_s}s")
 
-    def on_camera_info(self, msg: CameraInfo):
-        # K is the row-major 3x3 intrinsic matrix; K[4] is fy in pixels, the
-        # vertical focal length that matches a height measurement.
-        self.focal_length_px = msg.k[4]
-
-    def on_image(self, msg: Image):
+    def on_image(self, msg):
+        """Handle one camera frame: run YOLO and publish the best person, if any."""
+        frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        blob, scale, (pad_x, pad_y) = self._letterbox(frame)
         try:
-            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except CvBridgeError as exc:
-            self.get_logger().warn(f"cv_bridge conversion failed: {exc}")
+            raw = self._infer(blob)
+        except InferenceServerException as e:
+            # Triton slow or down: skip this frame instead of crashing the node
+            self.get_logger().warn(
+                f"Triton inference failed, skipping frame: {e}", throttle_duration_sec=5.0)
             return
+        fh, fw = frame.shape[:2]
+        det = self._decode(raw, scale, pad_x, pad_y, fw, fh, self.min_confidence)
+        if det is None:
+            return                           # no person -> publish nothing
 
-        with self._cond:
-            self._stats["received"] += 1
-            if self._pending is not None:
-                self._stats["dropped"] += 1
-            self._pending = (frame, msg.header)  # replaces any unprocessed frame
-            self._cond.notify()
-
-    def _inference_loop(self):
-        while True:
-            with self._cond:
-                while self._pending is None and not self._shutdown:
-                    self._cond.wait()
-                if self._shutdown:
-                    return
-                frame, header = self._pending
-                self._pending = None
-
-            try:
-                self._process(frame, header)
-            except Exception:
-                if not self.context.ok():
-                    return  # Ctrl+C shut ROS down mid-frame; nothing to publish to
-                raise
+        conf, x_min, y_min, x_max, y_max = det
+        out = Detection()
+        out.header = msg.header              # timestamp = camera capture time
+        out.confidence = float(conf)         # float() because ROS rejects numpy floats
+        out.x_min = float(x_min)
+        out.y_min = float(y_min)
+        out.x_max = float(x_max)
+        out.y_max = float(y_max)
+        self.pub.publish(out)
 
     @staticmethod
-    def _empty_stats():
-        return {"received": 0, "dropped": 0, "processed": 0, "infer_s": 0.0,
-                "infer_max_s": 0.0, "debug_s": 0.0, "since": time.monotonic()}
+    def _letterbox(frame):
+        """Fit a camera frame into the 640x640 input the Triton model expects.
 
-    def _log_stats(self):
-        with self._cond:
-            s, self._stats = self._stats, self._empty_stats()
-        elapsed = time.monotonic() - s["since"]
-        n = max(s["processed"], 1)
-        self.get_logger().info(
-            f"camera in {s['received'] / elapsed:.1f} Hz, "
-            f"processed {s['processed'] / elapsed:.1f} Hz, "
-            f"dropped {s['dropped']} stale | "
-            f"inference avg {1000 * s['infer_s'] / n:.0f} ms "
-            f"(max {1000 * s['infer_max_s']:.0f}), "
-            f"debug image avg {1000 * s['debug_s'] / n:.0f} ms"
-        )
+        Returns the model-ready blob plus the scale and padding used, which
+        are needed later to map the model's boxes back onto the real frame.
+        """
+        size = INPUT_SIZE
+        fh, fw = frame.shape[:2]
+        scale = min(size / fw, size / fh)        # smaller ratio: both sides fit, no distortion
+        nw, nh = int(round(fw * scale)), int(round(fh * scale))
+        pad_x = (size - nw) // 2                 # center the image; one of these is always 0
+        pad_y = (size - nh) // 2
+        resized = cv2.resize(frame, (nw, nh))    # note: resize takes (width, height)
+        # 114 = the grey padding YOLO was trained with
+        canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+        canvas[pad_y:pad_y + nh, pad_x:pad_x + nw] = resized
+        blob = canvas[:, :, ::-1]                # BGR -> RGB: model trained on RGB
+        blob = blob.transpose(2, 0, 1)           # HWC -> CHW: model wants channels first
+        blob = blob.astype(np.float32) / 255.0   # 0-255 -> 0.0-1.0
+        blob = blob[None]                        # add batch dimension -> (1, 3, 640, 640)
+        return np.ascontiguousarray(blob), scale, (pad_x, pad_y)
 
-    def destroy_node(self):
-        with self._cond:
-            self._shutdown = True
-            self._cond.notify()
-        self._worker.join(timeout=2.0)
-        super().destroy_node()
+    def _infer(self, blob):
+        """Send one letterboxed blob to Triton and return the model's raw output."""
+        inp = grpcclient.InferInput("images", list(blob.shape), "FP32")
+        inp.set_data_from_numpy(blob)
+        out = grpcclient.InferRequestedOutput("output0")
+        result = self.triton.infer(
+            self.model_name, [inp], outputs=[out], client_timeout=self.triton_timeout_s)
+        return result.as_numpy("output0")        # (1, 84, 8400)
 
-    def _process(self, frame, header):
-        t0 = time.monotonic()
-        detection = self._detect_person(frame)
-        t_infer = time.monotonic() - t0
-        distance_m = None
+    @staticmethod
+    def _decode(raw, scale, pad_x, pad_y, fw, fh, min_confidence=MIN_CONFIDENCE):
+        """Pick the most confident person box and map it back to frame pixels.
 
-        if detection is not None:
-            (cx, cy), (_x1, y1, _x2, y2), _score = detection
-            h = y2 - y1
-            point = PointStamped()
-            point.header = header
-            point.point.x = float(cx)
-            point.point.y = float(cy)
-            point.point.z = float(h)
-            self.position_pub.publish(point)
-
-            if self.focal_length_px is not None and h > 0:
-                # Pinhole model: apparent_height_px / focal_length_px ==
-                # real_height_m / distance_m, solved for distance_m.
-                distance_m = self.person_height_m * self.focal_length_px / h
-                self.distance_pub.publish(Float32(data=float(distance_m)))
-
-        if (
-            self.debug_image_pub is not None
-            and self.debug_image_pub.get_subscription_count() > 0
-        ):
-            self._publish_debug_image(frame, detection, distance_m, header)
-
-        with self._cond:
-            self._stats["processed"] += 1
-            self._stats["infer_s"] += t_infer
-            self._stats["infer_max_s"] = max(self._stats["infer_max_s"], t_infer)
-            self._stats["debug_s"] += time.monotonic() - t0 - t_infer
-
-    def _detect_person(self, frame):
-        results = self.model.predict(
-            frame,
-            imgsz=self.inference_size,
-            classes=[COCO_PERSON_CLASS],
-            conf=self.min_confidence,
-            device=self.device,
-            verbose=False,
-        )[0]
-        if len(results.boxes) == 0:
+        Returns (conf, x_min, y_min, x_max, y_max), or None if no person.
+        """
+        preds = raw[0]                    # drop batch dim -> (84, 8400)
+        scores = preds[PERSON_ROW]        # person score for all 8400 guesses
+        best = int(np.argmax(scores))     # index of the single most confident guess
+        conf = float(scores[best])
+        if conf < min_confidence:         # nobody confidently there -> no detection
             return None
-
-        best = max(results.boxes, key=lambda b: float(b.conf[0]))
-        x1, y1, x2, y2 = (float(v) for v in best.xyxy[0])
-        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0), (x1, y1, x2, y2), float(best.conf[0])
-
-    def _shrink_for_debug(self, image):
-        if self.debug_image_width <= 0 or image.shape[1] <= self.debug_image_width:
-            return image
-        scale = self.debug_image_width / image.shape[1]
-        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-
-    def _publish_debug_image(self, frame, detection, distance_m, header):
-        debug = frame.copy()
-        if detection is not None:
-            (cx, cy), (x1, y1, x2, y2), score = detection
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"person conf={score:.2f}"
-            if distance_m is not None:
-                label += f"  dist={distance_m:.2f}m"
-            cv2.putText(
-                debug,
-                label,
-                (x1, max(0, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2,
-                cv2.LINE_AA,
-            )
-            cv2.circle(debug, (int(cx), int(cy)), 4, (0, 255, 0), -1)
-
-        try:
-            debug_msg = self.bridge.cv2_to_imgmsg(
-                self._shrink_for_debug(debug), encoding="bgr8"
-            )
-        except CvBridgeError as exc:
-            self.get_logger().warn(f"cv_bridge conversion failed for debug image: {exc}")
-            return
-        debug_msg.header = header
-        self.debug_image_pub.publish(debug_msg)
+        cx, cy, w, h = preds[0:4, best]   # box center + size, in 640x640 letterbox pixels
+        # Undo the letterbox: remove the padding, then undo the resize
+        x_min = (cx - w / 2 - pad_x) / scale
+        y_min = (cy - h / 2 - pad_y) / scale
+        x_max = (cx + w / 2 - pad_x) / scale
+        y_max = (cy + h / 2 - pad_y) / scale
+        # Keep the box inside the real frame
+        x_min, x_max = max(0.0, x_min), min(float(fw), x_max)
+        y_min, y_max = max(0.0, y_min), min(float(fh), y_max)
+        return conf, x_min, y_min, x_max, y_max
 
 
-def main(args=None):
-    rclpy.init(args=args)
+def main():
+    rclpy.init()
     node = YoloPersonDetector()
     try:
-        rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException):
-        pass  # Ctrl+C: rclpy's signal handler has already shut ROS down
+        rclpy.spin(node)          # blocks here, calling on_image as frames arrive
+    except KeyboardInterrupt:
+        pass                      # Ctrl+C: exit quietly instead of a traceback
     finally:
         node.destroy_node()
-        rclpy.try_shutdown()
-
-
-if __name__ == "__main__":
-    main()
+        if rclpy.ok():
+            rclpy.shutdown()
