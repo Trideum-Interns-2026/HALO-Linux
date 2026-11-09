@@ -2,13 +2,21 @@
 set -e
 
 source /opt/ros/jazzy/setup.bash
-
-if [ -d /workspace/Perception ]; then
-    mkdir -p /opt/ros2_ws/src
-    ln -sfn /workspace/perception_msgs /opt/ros2_ws/src/perception_msgs
-    ln -sfn /workspace/Perception /opt/ros2_ws/src/Perception
-    (cd /opt/ros2_ws && colcon build --packages-select perception_msgs perception --symlink-install)
+if [ -f /opt/px4_ros2/install/setup.bash ]; then
+    source /opt/px4_ros2/install/setup.bash
 fi
+
+mkdir -p /opt/ros2_ws/src
+ln -sfn /workspace/perception_msgs /opt/ros2_ws/src/perception_msgs
+ln -sfn /workspace/Perception /opt/ros2_ws/src/Perception
+ln -sfn /workspace/geolocation_msgs /opt/ros2_ws/src/geolocation_msgs
+ln -sfn /workspace/Geolocation /opt/ros2_ws/src/Geolocation
+ln -sfn /workspace/tracking_msgs /opt/ros2_ws/src/tracking_msgs
+ln -sfn /workspace/Tracking /opt/ros2_ws/src/Tracking
+(cd /opt/ros2_ws && colcon build \
+    --packages-select perception_msgs perception geolocation_msgs geolocation \
+        tracking_msgs tracking \
+    --symlink-install)
 
 ln -sfn /workspace/Tracking/scripts/tracking /usr/local/bin/tracking
 ln -sfn /workspace/Geolocation/scripts/geolocation /usr/local/bin/geolocation
@@ -18,8 +26,8 @@ ln -sfn /workspace/Geolocation/scripts/geolocation /usr/local/bin/geolocation
 git config --global --get-all safe.directory | grep -qx /workspace || \
     git config --global --add safe.directory /workspace
 
-# Make `fly`, ROS 2, and the Perception overlay available in every new
-# terminal VS Code opens.
+# Make `fly`, ROS 2, PX4 messages, and the workspace overlay available in
+# every new terminal VS Code opens.
 #
 # Defaults to gz_x500_depth (X500 + OakD-Lite depth camera) rather than
 # PX4's plain gz_x500, since Perception needs the camera feed to work at
@@ -36,6 +44,8 @@ grep -q "source /opt/ros/jazzy/setup.bash" /etc/bash.bashrc || \
     echo "source /opt/ros/jazzy/setup.bash" >> /etc/bash.bashrc
 grep -q "ros2_ws/install/setup.bash" /etc/bash.bashrc || \
     echo "[ -f /opt/ros2_ws/install/setup.bash ] && source /opt/ros2_ws/install/setup.bash" >> /etc/bash.bashrc
+sed -i '\#px4_ros2/install/setup.bash#d' /etc/bash.bashrc
+sed -i '/ros2_ws\/install\/setup.bash/i [ -f /opt/px4_ros2/install/setup.bash ] \&\& source /opt/px4_ros2/install/setup.bash' /etc/bash.bashrc
 # ROS jazzy's setup.bash (sourced above) sets GZ_CONFIG_PATH to only the
 # ROS-vendored gz_transport/gz_msgs/etc paths, which replaces rather than
 # extends the CLI's built-in default of /usr/share/gz. That default is where
@@ -57,5 +67,5 @@ echo "alias perceive='ros2 launch perception perception.launch.py'" >> /etc/bash
 sed -i '/^alias gps=/d' /etc/bash.bashrc
 sed -i '/^alias tracking=/d' /etc/bash.bashrc
 sed -i '/^alias geolocation=/d' /etc/bash.bashrc
-echo "alias tracking='/workspace/Tracking/scripts/tracking'" >> /etc/bash.bashrc
-echo "alias geolocation='/workspace/Geolocation/scripts/geolocation'" >> /etc/bash.bashrc
+echo "alias tracking='ros2 launch tracking tracking.launch.py'" >> /etc/bash.bashrc
+echo "alias geolocation='ros2 launch geolocation geolocation.launch.py'" >> /etc/bash.bashrc

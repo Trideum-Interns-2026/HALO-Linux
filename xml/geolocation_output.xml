@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <message name="GeolocationState">
-  <field name="timestamp_ns" type="int64" description="Unix timestamp in nanoseconds"/>
+  <field name="header" type="std_msgs/Header" description="Input GPS timestamp and frame"/>
   <field name="latitude_deg" type="double" description="Latitude in decimal degrees"/>
   <field name="longitude_deg" type="double" description="Longitude in decimal degrees"/>
-  <field name="altitude_m" type="double" description="Altitude above mean sea level in meters"/>
-  <field name="position" type="triplet" description="LLA position"/>
-  <field name="error" type="triplet" description="Euclidean error in ENU/ECEF frame for covariance volume"/>
-  <field name="coord_frame" type="string" description="Coordinate frame used for the error triplet (ENU or ECEF)"/>
-  <field name="covariance_diag" type="double[9]" description="Diagonal covariance values for x, y, z"/>
+  <field name="altitude_m" type="double" description="Altitude above WGS84 ellipsoid in meters"/>
+  <field name="error_x_m" type="double" description="ECEF X-axis 3-sigma bound in meters"/>
+  <field name="error_y_m" type="double" description="ECEF Y-axis 3-sigma bound in meters"/>
+  <field name="error_z_m" type="double" description="ECEF Z-axis 3-sigma bound in meters"/>
 </message>

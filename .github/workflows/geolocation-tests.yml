@@ -1,0 +1,50 @@
+name: geolocation-tests
+
+on:
+  push:
+    paths:
+      - "Geolocation/**"
+      - "geolocation_msgs/**"
+      - ".github/workflows/geolocation-tests.yml"
+  pull_request:
+    paths:
+      - "Geolocation/**"
+      - "geolocation_msgs/**"
+      - ".github/workflows/geolocation-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-colcon-common-extensions \
+            ros-jazzy-ament-cmake-gtest \
+            ros-jazzy-rclcpp \
+            ros-jazzy-sensor-msgs \
+            ros-jazzy-std-msgs \
+            ros-jazzy-rosidl-default-generators \
+            ros-jazzy-rosidl-default-runtime
+
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths geolocation_msgs Geolocation \
+            --packages-select geolocation_msgs geolocation
+
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --base-paths geolocation_msgs Geolocation \
+            --packages-select geolocation_msgs geolocation \
+            --event-handlers console_direct+
+          colcon test-result --verbose

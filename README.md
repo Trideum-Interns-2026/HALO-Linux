@@ -13,8 +13,8 @@ The system is split into microservices, each with its own owner, interface and t
 | Service | Job | Code |
 | --- | --- | --- |
 | Perception | Find a person in camera images, publish `perception_msgs/Detection` | [Perception/](Perception/README.md), `perception_msgs/` |
-| Geolocation | Estimate the drone's own position | C++ prototype in `Geolocation/` |
-| Tracking | Estimate the person's position | C++ prototype in `Tracking/` |
+| Geolocation | Estimate the drone's own position | [`Geolocation/`](Geolocation/README.md), [`geolocation_msgs/`](geolocation_msgs/) |
+| Tracking | Estimate the person's position | [`Tracking/`](Tracking/README.md), [`tracking_msgs/`](tracking_msgs/) |
 | Movement | Follow the person, commanded over MAVLink | Older C++ programs in `Src/` |
 | UI/UX | Web view of the drone's data through a ROS bridge node | Not started |
 
@@ -38,13 +38,16 @@ Docker, WSL2 (Ubuntu), QGroundControl. Code runs inside a dev container
 4. Optional: `spawn_person [x] [y] [yaw]` adds a test target (default 5 m ahead, facing the drone).
 5. Arm and take off in QGroundControl. `fly`, `tracking`, `geolocation` and `move` do not arm or
    take off.
+6. Start `geolocation` to filter `/gps/fix`, then start `tracking` to combine detections,
+   camera calibration, Geolocation output and PX4 attitude.
 
 Check the output with `ros2 topic echo /perception/detection`.
+Geolocation publishes `/geolocation/position`; Tracking publishes `/tracking/position`.
 
-### Older tracking and movement programs
+### Older movement programs
 
-These programs are being replaced by the Tracking and Movement services and are partly out of date
-(see "Known broken or stale" in [AGENTS.md](AGENTS.md)). They are for SITL only, never a real vehicle.
+The old follow-person demo still expects perception topics that the current Perception service no
+longer publishes. The Tracking service is the supported person-position estimator.
 
 ```bash
 ./scripts/move <north_m> <east_m>   # short waypoint test, each offset <= 2 m, vehicle must be airborne
@@ -64,10 +67,18 @@ source install/setup.bash
 # Perception tests, no sim, GPU or Triton needed
 cd /workspace/Perception && python3 -m pytest test/ -v
 
-# C++ programs and the Geolocation unit test
+# ROS 2 position services (workspace is /opt/ros2_ws; never run colcon in /workspace)
+source /opt/ros/jazzy/setup.bash
+source /opt/px4_ros2/install/setup.bash
+cd /opt/ros2_ws && colcon build \
+  --packages-select perception_msgs geolocation_msgs geolocation tracking_msgs tracking \
+  --symlink-install
+colcon test --packages-select geolocation_msgs geolocation tracking_msgs tracking
+colcon test-result --verbose
+
+# Older movement programs
 cmake -S /workspace -B /workspace/build
-cmake --build /workspace/build --target geolocation tracking move follow_person drone_gps_kalman_filter_test
-ctest --test-dir /workspace/build --output-on-failure
+cmake --build /workspace/build --target move follow_person
 ```
 
 CI runs each service's tests on push: `.github/workflows/`.
@@ -77,7 +88,8 @@ CI runs each service's tests on push: `.github/workflows/`.
 | Path | What it is |
 | --- | --- |
 | `Perception/`, `perception_msgs/` | Perception service and its message package |
-| `Geolocation/`, `Tracking/` | C++ drone and target position prototypes |
+| `Geolocation/`, `geolocation_msgs/` | Drone GPS filtering service and output interface |
+| `Tracking/`, `tracking_msgs/` | Person-position service and output interface |
 | `Src/` | Older C++ movement and follow programs |
 | `scripts/` | `fly`, `move`, `follow_person`, `spark/verify.sh` |
 | `infra/triton/` | Shared Triton Inference Server config and engine build script |

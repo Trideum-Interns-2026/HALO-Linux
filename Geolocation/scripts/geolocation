@@ -2,16 +2,11 @@
 set -Ee -o pipefail
 
 source /opt/ros/jazzy/setup.bash
+if [[ -f /opt/px4_ros2/install/setup.bash ]]; then
+    source /opt/px4_ros2/install/setup.bash
+fi
 if [[ -f /opt/ros2_ws/install/setup.bash ]]; then
     source /opt/ros2_ws/install/setup.bash
 fi
 
-script_path="$(readlink -f "${BASH_SOURCE[0]}")"
-repo_dir="$(cd "$(dirname "$script_path")/../.." && pwd)"
-build_dir="${repo_dir}/build"
-
-cmake -S "$repo_dir" -B "$build_dir"
-cmake --build "$build_dir" --target geolocation
-
-echo "Starting geolocation node. Ctrl+C to stop."
-exec "$build_dir/geolocation" "$@"
+exec ros2 run geolocation geolocation_node "$@"

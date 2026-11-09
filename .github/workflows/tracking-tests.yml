@@ -1,0 +1,58 @@
+name: tracking-tests
+
+on:
+  push:
+    paths:
+      - "Tracking/**"
+      - "tracking_msgs/**"
+      - "geolocation_msgs/**"
+      - "perception_msgs/**"
+      - ".github/workflows/tracking-tests.yml"
+  pull_request:
+    paths:
+      - "Tracking/**"
+      - "tracking_msgs/**"
+      - "geolocation_msgs/**"
+      - "perception_msgs/**"
+      - ".github/workflows/tracking-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git \
+            python3-colcon-common-extensions \
+            ros-jazzy-ament-cmake-gtest \
+            ros-jazzy-rclcpp \
+            ros-jazzy-sensor-msgs \
+            ros-jazzy-std-msgs \
+            ros-jazzy-rosidl-default-generators \
+            ros-jazzy-rosidl-default-runtime
+          git clone --depth 1 https://github.com/PX4/px4_msgs.git /tmp/px4_msgs
+
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths /tmp/px4_msgs perception_msgs geolocation_msgs \
+            tracking_msgs Tracking \
+            --packages-select px4_msgs perception_msgs geolocation_msgs tracking_msgs tracking
+
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --base-paths /tmp/px4_msgs perception_msgs geolocation_msgs \
+            tracking_msgs Tracking \
+            --packages-select tracking_msgs tracking \
+            --event-handlers console_direct+
+          colcon test-result --verbose
