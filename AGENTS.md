@@ -67,7 +67,7 @@ the owner before creating a package.
 | `Include/Groundstation/` | `mavlink_interface.hpp` (raw MAVLink UDP sender for ROI commands) |
 | `CMakeLists.txt`, `package.xml` (root) | Build for the C++ code above (plain CMake, built by `scripts/*`, NOT colcon) |
 | `Perception/`, `perception_msgs/` | Perception service: node package + interface package |
-| `scripts/` | `fly` (start sim), `track`, `move`, `follow_person`, `demo`, `spark/verify.sh` |
+| `scripts/` | `fly` (start sim), `track`, `move`, `follow_person`, `spark/verify.sh` |
 | `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
 | `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
 | `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
@@ -163,9 +163,6 @@ The perception interface changed: the old package published `geometry_msgs/Point
 - `Include/Tracking/track_and_center.hpp`, `target_kalman_filter.hpp`: default to `/red_sphere_detector/red_sphere/*`.
 - `scripts/track`: passes red-sphere / `person_detector` topics via `PERCEIVE_TARGET`.
 - `scripts/move --follow-person`: launches the deleted `yolo_person_detection.launch.py`.
-- `scripts/demo`: runs the deleted `Perception/scripts/run_perception_demo.sh` and waits for the old topic.
-- Root `README.md`: describes the old detector, debug image, `PERCEIVE_TARGET`, and a `run_all.py` that does not exist.
-- `.vscode/settings.json`: points at ROS Foxy / Python 3.8 and a `Movement/` folder that does not exist.
 - `Detection` has no distance, by design: ranging belongs inside Tracking (e.g. pinhole `height_m * fy / box_height_px` from `camera_info`, test person 1.9 m, with height spread folded into the error).
 
 The C++ items above are being replaced by the new services; only patch them if a task needs the old demo working in the meantime. When fixing one, update every file the change touches in the same PR.
