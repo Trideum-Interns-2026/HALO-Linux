@@ -12,21 +12,6 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-add_executable(main ${CMAKE_SOURCE_DIR}/Src/main.cpp)
-target_include_directories(main PRIVATE
-    ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/Include
-    /usr/include/mavsdk
-    /usr/local/include/mavsdk
-)
-ament_target_dependencies(main
-    geometry_msgs
-    rclcpp
-    sensor_msgs
-    std_msgs
-)
-target_link_libraries(main Eigen3::Eigen MAVSDK::mavsdk)
-
 add_executable(move ${CMAKE_SOURCE_DIR}/Src/move.cpp)
 target_link_libraries(move MAVSDK::mavsdk)
 
@@ -44,3 +29,5 @@ ament_target_dependencies(follow_person
     std_msgs
 )
 target_link_libraries(follow_person Eigen3::Eigen MAVSDK::mavsdk)
+
+include(CTest)

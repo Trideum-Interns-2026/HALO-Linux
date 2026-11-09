@@ -34,8 +34,8 @@
     }
   },
 
-  // Runs once after the container is created — builds the Perception
-  // package and sets up shell aliases, without launching Gazebo.
+  // Runs once after the container is created — builds the ROS service
+  // packages and sets up shell aliases, without launching Gazebo.
   "postCreateCommand": "bash /workspace/.devcontainer/post-create.sh",
 
   "remoteUser": "root"
