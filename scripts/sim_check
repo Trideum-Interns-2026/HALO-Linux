@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# End-to-end simulator check of every HALO service. See scripts/sim_check.py for the details.
+#   sim_check [--gui] [--watch] [--skip-flight]
+set -Ee -o pipefail
+source /opt/ros/jazzy/setup.bash
+[[ -f /opt/px4_ros2/install/setup.bash ]] && source /opt/px4_ros2/install/setup.bash
+[[ -f /opt/ros2_ws/install/setup.bash ]] && source /opt/ros2_ws/install/setup.bash
+exec python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/sim_check.py" "$@"

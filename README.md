@@ -15,7 +15,7 @@ The system is split into microservices, each with its own owner, interface and t
 | Perception | Find a person in camera images, publish `perception_msgs/Detection` | [Perception/](Perception/README.md), `perception_msgs/` |
 | Geolocation | Estimate the drone's own position | [`Geolocation/`](Geolocation/README.md), [`geolocation_msgs/`](geolocation_msgs/) |
 | Tracking | Estimate the person's position | [`Tracking/`](Tracking/README.md), [`tracking_msgs/`](tracking_msgs/) |
-| Movement | Follow the person, commanded over MAVLink | [`Movement/`](Movement/README.md) (POI input not wired yet); older `Src/move.cpp` |
+| Movement | Follow the person, commanded over MAVLink | [`Movement/`](Movement/README.md) (ported from Lisa's follow_person); older `Src/move.cpp` |
 | UI/UX | Web view of the drone's data through a ROS bridge node | Not started |
 
 ## Prerequisites

@@ -46,3 +46,12 @@ Override a topic with
 cd /opt/ros2_ws && colcon test --packages-select geolocation_msgs geolocation
 colcon test-result --verbose
 ```
+
+## Tuning
+
+`config/tuned.yaml` has a process noise tuned with `geolocation_tune` (built with the package, no
+ROS or sim needed): `ros2 run geolocation geolocation_tune`. The simulator's GPS is noiseless, so
+the tuner uses the noise of a real receiver (1.0 m horizontal, 1.5 m vertical) on a hovering and an
+orbiting drone, and scores error against the known truth. The filter is a random walk, so it lags a
+moving drone; only a velocity state would remove that. Retune when the receiver, its rate or the
+vehicle's motion changes.

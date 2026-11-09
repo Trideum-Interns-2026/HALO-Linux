@@ -1,0 +1,28 @@
+# Logic tests for the sim helper scripts (scripts/sitl_vehicle, scripts/sim_check.py).
+# No sim, ROS or MAVLink needed.
+name: scripts-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/scripts-tests.yml"
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/scripts-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pytest
+        run: sudo apt-get install -y --no-install-recommends python3-pytest
+      - name: Test
+        run: python3 -m pytest scripts/tests -v

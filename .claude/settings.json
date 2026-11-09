@@ -1,0 +1,130 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "subagentPromptCacheTtl": "1h",
+  "permissions": {
+    "allow": [
+      "Bash(colcon *)",
+      "Bash(pytest *)",
+      "Bash(python3 -m pytest *)",
+      "Bash(cmake *)",
+      "Bash(ros2 topic *)",
+      "Bash(ros2 interface *)",
+      "Bash(ros2 node *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git status *)",
+      "Bash(ruff *)",
+      "Read",
+      "Grep",
+      "Glob",
+      "WebFetch(domain:docs.px4.io)",
+      "WebFetch(domain:mavsdk.mavlink.io)",
+      "WebFetch(domain:docs.ros.org)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(docker *)",
+      "Bash(rm -rf *)",
+      "Edit(.github/workflows/perception-tests.yml)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/bootstrap.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-bash.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-tests.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/lint-py.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/test-touched.sh"
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/task-shape.sh"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/test-gate.sh"
+          },
+          {
+            "type": "prompt",
+            "prompt": "Given this diff, answer BLOCK or PASS with one sentence. BLOCK if it weakens, skips or deletes a test; hardcodes a MAVSDK or MAVLink endpoint, /world/default, or a camera size in node code; adds a motion command without a named limit; or arms or takes off in node code rather than through scripts/sitl_vehicle or scripts/sim_check. Otherwise PASS. Hook input: $ARGUMENTS. Reply as JSON: {\"ok\": false, \"reason\": \"<sentence>\"} for BLOCK, {\"ok\": true} for PASS."
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/test-gate.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/precompact.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

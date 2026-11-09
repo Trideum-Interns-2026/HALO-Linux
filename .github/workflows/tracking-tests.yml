@@ -2,6 +2,7 @@ name: tracking-tests
 
 on:
   push:
+    branches: [main]
     paths:
       - "Tracking/**"
       - "tracking_msgs/**"
@@ -15,6 +16,10 @@ on:
       - "geolocation_msgs/**"
       - "perception_msgs/**"
       - ".github/workflows/tracking-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -32,27 +37,60 @@ jobs:
           apt-get install -y --no-install-recommends \
             git \
             python3-colcon-common-extensions \
-            ros-jazzy-ament-cmake-gtest \
+            ccache ros-jazzy-ament-cmake-gtest \
             ros-jazzy-rclcpp \
             ros-jazzy-sensor-msgs \
             ros-jazzy-std-msgs \
             ros-jazzy-rosidl-default-generators \
             ros-jazzy-rosidl-default-runtime
-          git clone --depth 1 https://github.com/PX4/px4_msgs.git /tmp/px4_msgs
 
-      - name: Build
+      # px4_msgs is the slow part (hundreds of messages to generate and compile), so it is built
+      # once into an install prefix and cached. The key is the upstream HEAD sha, so the cache
+      # refreshes whenever px4_msgs changes and is reused otherwise.
+      - name: Find px4_msgs revision
+        id: px4rev
+        run: echo "sha=$(git ls-remote https://github.com/PX4/px4_msgs.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache px4_msgs build
+        id: px4cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/px4_msgs_install
+          key: px4_msgs-jazzy-${{ steps.px4rev.outputs.sha }}
+
+      - name: Build px4_msgs
+        if: steps.px4cache.outputs.cache-hit != 'true'
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --base-paths /tmp/px4_msgs perception_msgs geolocation_msgs \
-            tracking_msgs Tracking \
-            --packages-select px4_msgs perception_msgs geolocation_msgs tracking_msgs tracking
+          git clone --depth 1 https://github.com/PX4/px4_msgs.git /tmp/px4_msgs
+          colcon build --base-paths /tmp/px4_msgs --build-base /tmp/px4_build \
+            --install-base /opt/px4_msgs_install --merge-install \
+            --cmake-args -DBUILD_TESTING=OFF --parallel-workers "$(nproc)"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-tracking-${{ github.sha }}
+          restore-keys: ccache-tracking-
+
+      - name: Build
+        env:
+          CCACHE_DIR: /tmp/ccache
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source /opt/px4_msgs_install/setup.bash
+          colcon build --base-paths perception_msgs geolocation_msgs tracking_msgs Tracking \
+            --packages-select perception_msgs geolocation_msgs tracking_msgs tracking \
+            --parallel-workers "$(nproc)" \
+            --cmake-args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Test
         run: |
           source /opt/ros/jazzy/setup.bash
+          source /opt/px4_msgs_install/setup.bash
           source install/setup.bash
-          colcon test --base-paths /tmp/px4_msgs perception_msgs geolocation_msgs \
-            tracking_msgs Tracking \
+          colcon test --base-paths perception_msgs geolocation_msgs tracking_msgs Tracking \
             --packages-select tracking_msgs tracking \
             --event-handlers console_direct+
           colcon test-result --verbose

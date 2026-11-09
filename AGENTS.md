@@ -15,10 +15,10 @@ interface and tests, and no one service is the template or the priority. The rul
 | Service | Owner | Job | Input | Output | Code today |
 | --- | --- | --- | --- | --- | --- |
 | Perception | Cohen | Find a person in camera images | camera image (ROS 2) | `perception_msgs/Detection`: header, confidence, bounding box in pixels | `Perception/`, `perception_msgs/` (done) |
-| Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | header + LLA position + error (see "Position output format") | none yet |
-| Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | same format as Geolocation | old code in `Include/Tracking/`, `Src/main.cpp` (to be replaced) |
-| Movement | Lisa | Follow the POI: go to a set distance from it, circle it, keep it centered | POI position (ROS 2) | vehicle motion only, sent as MAVLink goto commands (not ROS) | `Movement/` (goto logic + node done; POI input waits on Tracking), old `Src/move.cpp` waypoint test, `track_and_center.hpp` (to be replaced) |
-| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | `Include/Groundstation/mavlink_interface.hpp` (ROI to QGC); no web code yet |
+| Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | `geolocation_msgs/GeolocationState` (see "Position output format") | `Geolocation/`, `geolocation_msgs/` |
+| Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | `tracking_msgs/TrackingState`, same format as Geolocation | `Tracking/`, `tracking_msgs/` |
+| Movement | Lisa | Follow the person: keep them centred in the camera at a set distance, scan when lost | `perception_msgs/Detection` + `camera_info` (ROS 2) | vehicle motion only, sent over MAVLink (offboard velocity today; goto is still open) | `Movement/` (port of Lisa's `follow_person`), old `Src/move.cpp` waypoint test |
+| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | no code yet |
 
 Design decisions already made:
 - Every service output carries a timestamp (`std_msgs/Header`).
@@ -26,12 +26,13 @@ Design decisions already made:
   LLA plus an error triplet in ECEF (see below). Only what they locate and their inputs differ.
 - Range to the person is internal to Tracking, not a published output. The expected human height
   error is folded into the error triplet. That is why `Detection` has no distance field.
-- Movement subscribes to the POI position over ROS 2 and commands the vehicle only over MAVLink
-  (goto commands), NOT ROS. It also owns centering the target in the camera.
+- Movement commands the vehicle only over MAVLink, NOT ROS, and owns centering the target in the
+  camera. Today it follows the `Detection` box (Lisa's controller); the plan is to follow the Tracking
+  position with goto commands (see "Open questions").
 - The UI must NOT connect directly to ROS or the drone. A ROS-side bridge node translates data to
   web formats and serves it over the network (HTTP); MAVLink may be used for drone health.
-- The old C++ tracking/follow code in `Src/` and `Include/` is replaced by these services, not
-  extended. Do not add features to it; port what is useful into the owning service.
+- The old C++ tracking/follow code is gone (replaced by Tracking and Movement). `Src/move.cpp` is the
+  one remaining old program; do not add features to it.
 
 ### Position output format (Geolocation and Tracking)
 
@@ -41,9 +42,10 @@ Design decisions already made:
    draw, and the error is radial. ECEF is Cartesian, so the error is a smooth sphere/ellipsoid
    that is easy to render (and suits radar).
 
-Not decided yet: exactly what the error triplet means (per-axis 1-sigma, a radius, or something
-else) and the `.msg` field names. Do not pick these in code; ask Brooks. The message goes in a
-shared `_msgs` package used by Geolocation, Tracking, Movement and the UI bridge.
+Decided (see `geolocation_msgs/msg/GeolocationState.msg`, `tracking_msgs/msg/TrackingState.msg`):
+fields `latitude_deg`, `longitude_deg`, `altitude_m`, and `error_x_m`/`error_y_m`/`error_z_m`, where the
+error is a per-axis 3-sigma bound in ECEF metres. Ask Brooks before changing them; Movement and the UI
+bridge consume them.
 
 ### Language choice
 
@@ -62,19 +64,19 @@ the owner before creating a package.
 
 | Path | What it is |
 | --- | --- |
-| `Src/` | C++ executables: `main.cpp` (tracking: Kalman + centering), `move.cpp` (waypoint test) |
-| `Include/Tracking/` | `target_kalman_filter.hpp`, `track_and_center.hpp` (ROS 2 nodes used by `main`) |
-| `Include/Groundstation/` | `mavlink_interface.hpp` (raw MAVLink UDP sender for ROI commands) |
+| `Src/` | `move.cpp` (waypoint test), the only old C++ program left |
+| `Geolocation/`, `geolocation_msgs/` | Geolocation service + interface package |
+| `Tracking/`, `tracking_msgs/` | Tracking service + interface package |
 | `CMakeLists.txt`, `package.xml` (root) | Build for the C++ code above (plain CMake, built by `scripts/*`, NOT colcon) |
 | `Perception/`, `perception_msgs/` | Perception service: node package + interface package |
-| `Movement/` | Movement service (C++, ament_cmake): goto logic, MAVSDK adapter, node, tests |
-| `scripts/` | `fly` (start sim), `track`, `move`, `spark/verify.sh` |
+| `Movement/` | Movement service (C++, ament_cmake): follow control math, MAVSDK adapter, node, tests |
+| `scripts/` | `fly` (start sim), `move`, `spark/verify.sh` |
 | `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
 | `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
 | `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
 | `Dockerfile`, `docker-compose*.yml` | Base image (`px4io/px4-sitl-gazebo-ros2`) and compose overrides (`.wsl`, `.spark`) |
 | `docs/spark/README.md` | Full Spark setup + QGroundControl over TCP |
-| `.github/workflows/` | CI (`perception-tests.yml`, `movement-tests.yml`) |
+| `.github/workflows/` | CI (`scripts-tests.yml`, `perception-tests.yml`, `geolocation-tests.yml`, `tracking-tests.yml`, `movement-tests.yml`) |
 
 ## Environments
 
@@ -104,15 +106,19 @@ fly                       # terminal 1: PX4 SITL + Gazebo (waits until /world/de
 HEADLESS=1 fly            # same, no Gazebo window
 perceive                  # terminal 2: camera bridge + YOLO detector (ros2 launch perception perception.launch.py)
 movement                  # movement service (ros2 launch movement movement.launch.py); needs an armed, airborne vehicle
+sim_check [--gui|--watch]   # one command: whole stack in the sim, arms and flies it, PASS/FAIL table, tears down (SITL only)
+simlinks                  # sim-only: GPS bridge -> /gps/fix + uXRCE-DDS agent (/fmu/...); run next to fly
+sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # SITL only; human (/arm) or sim-operator; uses PX4 port 14580, runs alongside movement
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
-track                     # tracking (builds + runs build/main)
+tracking                  # tracking service (ros2 launch tracking tracking.launch.py)
+geolocation               # geolocation service (ros2 launch geolocation geolocation.launch.py)
 ./scripts/move <n_m> <e_m>   # short waypoint test, |offset| <= 2 m, vehicle must already be airborne
 
 # ROS 2 packages (build workspace is /opt/ros2_ws, packages symlinked from /workspace)
 cd /opt/ros2_ws && colcon build --packages-select <pkg>_msgs <pkg> --symlink-install && source install/setup.bash
 
 # C++ in the root project (Src/)
-cmake -S /workspace -B /workspace/build && cmake --build /workspace/build --target <main|move>
+cmake -S /workspace -B /workspace/build && cmake --build /workspace/build --target move
 
 # tests for any ROS 2 package
 cd /opt/ros2_ws && colcon test --packages-select <pkg>_msgs <pkg> && colcon test-result --verbose
@@ -127,7 +133,7 @@ gz topic -l | grep image
 
 - NEVER run `colcon build` in `/workspace`: the root `package.xml` makes colcon see the wrong package.
 - Python edits in an ament_python package need no rebuild (`--symlink-install`); restart the node. New files, `setup.py`, `package.xml`, `CMakeLists.txt`, `.msg` or any C++ change need a rebuild.
-- `fly`, `track`, `move` and `movement` do NOT arm or take off. Arm and take off in QGroundControl first.
+- `fly`, `tracking`, `geolocation`, `move` and `movement` do NOT arm or take off. Arm and take off in QGroundControl first.
 - MAVSDK connects on `udpin://0.0.0.0:14540`. Ground-station MAVLink on UDP 14550.
 
 ## Data flow between services
@@ -153,19 +159,16 @@ Interfaces that exist today:
 | `/camera/front/image_raw` | `sensor_msgs/Image` | camera bridge (sim) | 1920x1080, 15 Hz in sim |
 | `/camera/front/camera_info` | `sensor_msgs/CameraInfo` | camera bridge (sim) | intrinsics |
 | `/perception/detection` | `perception_msgs/Detection` | Perception | header, confidence, x_min/y_min/x_max/y_max in pixels; only when a target is seen |
-| `/vehicle/position`, `/vehicle/heading_deg` | see `Include/Tracking/*.hpp` | `main` (old tracking code) | internal to `main`; goes away when it is replaced |
+| `/geolocation/position` | `geolocation_msgs/GeolocationState` | Geolocation | drone LLA + ECEF 3-sigma error |
+| `/tracking/position` | `tracking_msgs/TrackingState` | Tracking | person LLA + ECEF 3-sigma error |
 
 ## Known broken or stale
 
 The perception interface changed: the old package published `geometry_msgs/PointStamped` on
 `/<detector>/<target>/position` and `std_msgs/Float32` on `.../distance`; the new one publishes
-`Detection` on `/perception/detection`. These still expect the old interface:
+`Detection` on `/perception/detection`. Nothing in the repo consumes the old interface any more.
 
-- `Include/Tracking/track_and_center.hpp`, `target_kalman_filter.hpp`: default to `/red_sphere_detector/red_sphere/*`.
-- `scripts/track`: passes red-sphere / `person_detector` topics via `PERCEIVE_TARGET`.
 - `Detection` has no distance, by design: ranging belongs inside Tracking (e.g. pinhole `height_m * fy / box_height_px` from `camera_info`, test person 1.9 m, with height spread folded into the error).
-
-The C++ items above are being replaced by the new services; only patch them if a task needs the old demo working in the meantime. When fixing one, update every file the change touches in the same PR.
 
 ## Microservice rules (every service)
 
@@ -232,7 +235,7 @@ model in `infra/triton/model_repository/<model>/`).
 - Motion code (Movement) additionally tests that every limit is enforced and that loss of target or connection leads to a safe stop.
 - CI: one workflow per service, `.github/workflows/<name>-tests.yml`, in a plain `ros:jazzy` container, filtered to that service's paths. `perception-tests.yml` is an existing example of the format.
 - NEVER skip, delete or weaken a test to make CI pass.
-- The C++ code in `Src/` and `Include/` has no tests or CI yet.
+- `Src/move.cpp` has no tests or CI.
 
 ## Safety and hardware readiness
 
@@ -250,16 +253,16 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
 - Every motion command MUST be bounded: speed, yaw rate, offset, and follow-distance limits as named
   constants or parameters, enforced in code.
 - Every offboard / motion program MUST stop and return PX4 to Hold on exit, Ctrl+C, timeout, lost
-  target, or lost connection (see `OffboardGuard` in `move.cpp`; `Movement/` holds via `MovementNode::shutdown`).
+  target, or lost connection (see `OffboardGuard` in `move.cpp`; `Movement/` leaves offboard via `MovementNode::shutdown`).
+  Exception, by Lisa's design: `Movement/` scans for a lost target (`search_timeout_s`, default 0 = until found) instead of stopping at once; set a timeout to hand back to Hold. It always leaves offboard on exit.
 - NEVER arm, take off, or command motion automatically unless that program's documented purpose is
-  to do so (today no program does). Programs assume a human armed the vehicle.
+  to do so (today only `scripts/sitl_vehicle` and `scripts/sim_check`, run by a human or by the sim-operator in the sim, local endpoints only, takeoff <= 10 m). Programs assume a human armed the vehicle.
 - An agent MUST NOT run anything against a real vehicle or flight controller, or change code paths
   meant for one, without explicit instruction from a human in the current task.
 
-## Notes on the current C++ code (`Src/`, `Include/`)
+## Notes on `Src/move.cpp`
 
 - C++17, MAVSDK + rclcpp + Eigen. Each executable is its own `add_executable` in the root `CMakeLists.txt`.
-- `main` runs the old tracking nodes (`TargetKalmanFilterNode`, `TrackAndCenterNode`) in one `MultiThreadedExecutor`. All of this is to be replaced by the Tracking and Movement services.
 - Offboard control returns PX4 to Hold on exit, timeout or Ctrl+C (see `OffboardGuard` in `move.cpp`).
 
 ## Before finishing any change
@@ -280,7 +283,6 @@ General
 - Exact package and topic names for Geolocation, Tracking, Movement and UI (pattern above).
 
 Geolocation and Tracking (Brooks)
-- What the ECEF error triplet means (per-axis 1-sigma, radius, other) and the `.msg` field names.
 - How perception data feeds the drone's own position estimate in Geolocation.
 
 Movement (Lisa)

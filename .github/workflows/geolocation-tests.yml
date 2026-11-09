@@ -2,6 +2,7 @@ name: geolocation-tests
 
 on:
   push:
+    branches: [main]
     paths:
       - "Geolocation/**"
       - "geolocation_msgs/**"
@@ -11,6 +12,10 @@ on:
       - "Geolocation/**"
       - "geolocation_msgs/**"
       - ".github/workflows/geolocation-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -27,18 +32,29 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             python3-colcon-common-extensions \
-            ros-jazzy-ament-cmake-gtest \
+            ccache ros-jazzy-ament-cmake-gtest \
             ros-jazzy-rclcpp \
             ros-jazzy-sensor-msgs \
             ros-jazzy-std-msgs \
             ros-jazzy-rosidl-default-generators \
             ros-jazzy-rosidl-default-runtime
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-geolocation-${{ github.sha }}
+          restore-keys: ccache-geolocation-
+
       - name: Build
+        env:
+          CCACHE_DIR: /tmp/ccache
         run: |
           source /opt/ros/jazzy/setup.bash
           colcon build --base-paths geolocation_msgs Geolocation \
-            --packages-select geolocation_msgs geolocation
+            --packages-select geolocation_msgs geolocation \
+            --parallel-workers "$(nproc)" \
+            --cmake-args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Test
         run: |

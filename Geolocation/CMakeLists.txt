@@ -18,11 +18,16 @@ ament_target_dependencies(geolocation_node
   sensor_msgs
 )
 
-install(TARGETS geolocation_node
+# Offline filter tuner (no ROS): see tools/tune_position_filter.cpp.
+add_executable(geolocation_tune tools/tune_position_filter.cpp)
+target_include_directories(geolocation_tune PRIVATE include)
+
+install(TARGETS geolocation_node geolocation_tune
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
