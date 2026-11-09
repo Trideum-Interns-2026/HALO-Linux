@@ -23,9 +23,9 @@ namespace {
 constexpr double kDefaultDistanceM = 6.0;
 constexpr double kMinDistanceM = 4.0;
 constexpr double kMaxDistanceM = 9.0;
-constexpr double kMaxForwardSpeedMps = 0.4;
-constexpr double kMaxStrafeSpeedMps = 0.25;
-constexpr double kMaxYawRateDegS = 25.0;
+constexpr double kMaxForwardSpeedMps = 0.7;
+constexpr double kMaxStrafeSpeedMps = 0.45;
+constexpr double kMaxYawRateDegS = 45.0;
 constexpr auto kTargetLifetime = std::chrono::milliseconds(800);
 constexpr auto kLoopPeriod = std::chrono::milliseconds(100);
 
@@ -54,6 +54,10 @@ public:
         declare_parameter("max_strafe_m_s", kMaxStrafeSpeedMps);
         declare_parameter("max_yaw_rate_deg_s", kMaxYawRateDegS);
         declare_parameter("target_timeout_ms", static_cast<int>(kTargetLifetime.count()));
+        declare_parameter("search_yaw_rate_deg_s", 25.0);
+        declare_parameter("search_forward_m_s", 0.35);
+        declare_parameter("search_strafe_m_s", 0.45);
+        declare_parameter("search_orbit_hz", 0.25);
 
         position_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
             get_parameter("position_topic").as_string(), 10,
@@ -214,6 +218,10 @@ private:
         const auto target_age = std::chrono::steady_clock::now() - last_detection_time_;
         const bool target_is_fresh = have_position && target_age <= std::chrono::milliseconds(timeout_ms);
 
+        if (target_is_fresh) {
+            last_search_time_ = std::chrono::steady_clock::time_point::min();
+        }
+
         double forward_m_s = 0.0;
         double right_m_s = 0.0;
         double yawspeed_deg_s = 0.0;
@@ -236,14 +244,33 @@ private:
 
             const double lateral_error = clamp(normalized * 0.7, -1.0, 1.0);
             right_m_s = clamp(lateral_error * max_strafe, -max_strafe, max_strafe);
-            yawspeed_deg_s = clamp(normalized * max_yaw, -max_yaw, max_yaw);
+            // Keep the drone pointed at the detected person whenever the person is present in frame.
+            const double yaw_to_target_deg_s = clamp(normalized * max_yaw, -max_yaw, max_yaw);
+            yawspeed_deg_s = yaw_to_target_deg_s;
 
             RCLCPP_INFO_THROTTLE(
                 get_logger(), *get_clock(), 1000,
                 "target offset=%.1f px, distance=%.2f m, forward=%.2f m/s, yaw=%.1f deg/s",
                 offset_px, distance_m, forward_m_s, yawspeed_deg_s);
         } else {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "No fresh target; hovering.");
+            const auto now = std::chrono::steady_clock::now();
+            if (last_search_time_ == std::chrono::steady_clock::time_point::min()) {
+                last_search_time_ = now;
+            }
+            const double elapsed_s = std::chrono::duration<double>(now - last_search_time_).count();
+            const double orbit_hz = get_parameter("search_orbit_hz").as_double();
+            const double orbit_phase = 2.0 * 3.14159265358979323846 * orbit_hz * elapsed_s;
+            const double search_forward = get_parameter("search_forward_m_s").as_double();
+            const double search_strafe = get_parameter("search_strafe_m_s").as_double();
+
+            forward_m_s = search_forward * 0.8;
+            right_m_s = std::sin(orbit_phase) * search_strafe;
+            yawspeed_deg_s = get_parameter("search_yaw_rate_deg_s").as_double();
+
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 1000,
+                "Target lost; searching with spiral scan: forward=%.2f m/s, strafe=%.2f m/s, yaw=%.1f deg/s",
+                forward_m_s, right_m_s, yawspeed_deg_s);
         }
 
         const auto result = offboard_->set_velocity_body({
@@ -281,6 +308,7 @@ private:
     bool have_camera_info_{false};
     bool offboard_started_{false};
     std::chrono::steady_clock::time_point last_detection_time_;
+    std::chrono::steady_clock::time_point last_search_time_{std::chrono::steady_clock::time_point::min()};
 };
 
 int main(int argc, char** argv) {
