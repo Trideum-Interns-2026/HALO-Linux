@@ -42,11 +42,12 @@ instance_group [
 # This is the per-client-queue + batched-inference scheduler, in config
 # form. Requests from separate dev containers arriving within
 # max_queue_delay of each other are merged into one batch; a request never
-# waits longer than that for company. 10 ms is below the 15 Hz camera
-# period (66 ms) so it costs essentially nothing in latency, and the
-# preferred sizes cover "two or three people flying" without waiting for
-# all five. Re-tune from the perf_analyzer numbers in scripts/spark/verify.sh.
+# waits longer than that for company. The camera runs at 30 Hz (33 ms
+# period) and a lone client waits the whole delay for a partner that never
+# comes, so the delay is kept at 2 ms: at 10 ms it would eat 30% of the
+# frame budget. The preferred sizes cover "two or three people flying".
+# Re-tune from the perf_analyzer numbers in scripts/spark/verify.sh.
 dynamic_batching {
   preferred_batch_size: [ 2, 4 ]
-  max_queue_delay_microseconds: 10000
+  max_queue_delay_microseconds: 2000
 }

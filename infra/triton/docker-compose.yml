@@ -7,7 +7,7 @@
 # once by whoever administers the Spark, not per developer:
 #
 #   cd infra/triton
-#   ./build_engine.sh                # exports yolov8n → model_repository/yolo_person/1/model.plan
+#   ./build_engine.sh                # exports $MODEL (default yolov8x) → model_repository/yolo_person/1/model.plan
 #   docker compose up -d
 #   docker compose logs -f           # wait for "yolo_person | 1 | READY"
 #

@@ -79,11 +79,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     && python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # The OakD-Lite color camera (IMX214) renders 1920x1080 at 30 Hz, which is
-# ~180 MB/s through the ROS bridge — more than the detectors can use, and a
-# big part of the camera pipeline's lag. 15 Hz is plenty for tracking a
-# person. Only the first <update_rate> in the model is the IMX214; the depth
-# camera after it is left alone.
-RUN sed -i '0,/<update_rate>30<\/update_rate>/s//<update_rate>15<\/update_rate>/' \
-        /opt/px4-gazebo/share/gz/models/OakD-Lite/model.sdf
+# ~180 MB/s through the ROS bridge. 30 Hz is the tracking target (a running person moves
+# ~15 cm per frame at 30 Hz, ~30 cm at 15 Hz), so the model's own <update_rate> is left
+# alone. An earlier build capped it to 15 Hz here with sed; to go back, add that sed again.
 
-WORKDIR /workspace
+WORKDIR /workspace

@@ -93,7 +93,7 @@ Two dev container profiles. Code runs inside the container; the repo is mounted 
 Facts that cause bugs if forgotten:
 - Anything that calls Triton (today: perception) only runs on the Spark profile as of now.
 - `PX4_SIM_MODEL=gz_x500_depth` (X500 + OakD-Lite). Plain `gz_x500` has no camera.
-- The color camera is 1920x1080 at 15 Hz (the Dockerfile caps it from 30).
+- The color camera is 1920x1080 at 30 Hz (the model default; the Dockerfile no longer caps it to 15).
 - Spark containers are fenced to localhost (`ROS_LOCALHOST_ONLY=1`, `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, `GZ_IP=127.0.0.1`) so developers don't see each other's sims. NEVER remove these.
 - Gazebo world name is usually `default`; scripts find it dynamically via `Perception/scripts/gz_world.sh`.
 - The camera bridge launch (`Perception/launch/gz_harmonic_bridge.launch.py`) and the person spawner live in `Perception/` today but are shared sim tooling; any service can use them.
@@ -157,7 +157,7 @@ Interfaces that exist today:
 
 | Topic | Type | Publisher | Notes |
 | --- | --- | --- | --- |
-| `/camera/front/image_raw` | `sensor_msgs/Image` | camera bridge (sim) | 1920x1080, 15 Hz in sim |
+| `/camera/front/image_raw` | `sensor_msgs/Image` | camera bridge (sim) | 1920x1080, 30 Hz in sim |
 | `/camera/front/camera_info` | `sensor_msgs/CameraInfo` | camera bridge (sim) | intrinsics |
 | `/perception/detection` | `perception_msgs/Detection` | Perception | header, confidence, x_min/y_min/x_max/y_max in pixels; only when a target is seen |
 | `/geolocation/position` | `geolocation_msgs/GeolocationState` | Geolocation | drone LLA + ECEF 3-sigma error |
@@ -249,7 +249,7 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
 - Sim-only helpers (spawn scripts, Gazebo bridges, `gz` calls, `/world/...` services) stay in
   `scripts/`, launch files, or a package's `scripts/`. NEVER call them from any service's node code.
 - Read camera size and intrinsics from `camera_info` / the image itself, not from constants matching
-  the Gazebo camera (1920x1080, 15 Hz).
+  the Gazebo camera (1920x1080, 30 Hz).
 - Use the message header stamp (or ROS time) for timing, never wall-clock assumptions about sim speed.
 - Every motion command MUST be bounded: speed, yaw rate, offset, and follow-distance limits as named
   constants or parameters, enforced in code.

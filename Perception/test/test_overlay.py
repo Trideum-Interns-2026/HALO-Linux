@@ -6,6 +6,7 @@ import math
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import cv2
 import numpy as np
 import pytest
 import rclpy
@@ -220,3 +221,62 @@ def test_unreadable_image_is_skipped_without_crashing(node):
     bad.data = [0] * 48
     node.on_image(bad)                                           # must not raise
     node.pub.publish.assert_not_called()
+
+
+# ---------- box follows the motion, compressed output ----------
+
+
+def nanosec_detection(nanosec, box):
+    msg = detection(sec=10, box=box)
+    msg.header.stamp.nanosec = nanosec
+    return msg
+
+
+def test_box_is_moved_to_the_image_timestamp(node):
+    node.scale = 1.0
+    # 100 px per 0.1 s to the right; the image is 0.05 s after the newest detection
+    node.on_detection(nanosec_detection(0, (100.0, 100.0, 200.0, 300.0)))
+    node.on_detection(nanosec_detection(100_000_000, (200.0, 100.0, 300.0, 300.0)))
+    img = camera_image(sec=10)
+    img.header.stamp.nanosec = 150_000_000
+    node.on_image(img)
+    _, frame = published_frame(node)
+    assert tuple(frame[200, 250]) == BOX_COLOR_BGR               # extrapolated x_min = 250
+    assert not frame[200, 200].any()                             # not left at the old 200
+
+
+def test_extrapolation_is_capped_by_max_predict_s(node):
+    node.scale = 1.0
+    node.max_predict_s = 0.1
+    node.on_detection(nanosec_detection(0, (100.0, 100.0, 200.0, 300.0)))
+    node.on_detection(nanosec_detection(100_000_000, (200.0, 100.0, 300.0, 300.0)))
+    img = camera_image(sec=10)
+    img.header.stamp.nanosec = 450_000_000                       # 0.35 s later, fresh (<0.5 s)
+    node.on_image(img)
+    _, frame = published_frame(node)
+    assert tuple(frame[200, 300]) == BOX_COLOR_BGR               # capped at +100 px, x_min 300
+
+
+def test_compressed_output_is_off_by_default(node):
+    assert node.pub_compressed is None
+    assert node.get_parameter("max_predict_s").value == pytest.approx(0.15)
+    assert node.get_parameter("publish_compressed").value is False
+
+
+def test_compressed_output_publishes_a_decodable_jpeg_with_the_header():
+    rclpy.init()
+    try:
+        n = DetectionOverlay(parameter_overrides=[
+            rclpy.parameter.Parameter("publish_compressed", value=True),
+            rclpy.parameter.Parameter("scale", value=1.0)])
+        n.pub, n.pub_compressed = MagicMock(), MagicMock()
+        n.on_detection(detection(sec=10))
+        n.on_image(camera_image(sec=10))
+        packed = n.pub_compressed.publish.call_args[0][0]
+        assert packed.format == "jpeg"
+        assert packed.header.stamp.sec == 10 and packed.header.frame_id == "camera_link"
+        decoded = cv2.imdecode(np.frombuffer(bytes(packed.data), np.uint8), cv2.IMREAD_COLOR)
+        assert decoded.shape == (360, 640, 3)
+        n.destroy_node()
+    finally:
+        rclpy.shutdown()
