@@ -5,11 +5,12 @@ YOLO server, and publishes the most confident person as a
 perception_msgs/Detection.
 
 Topics
-    in   /camera/front/image_raw   sensor_msgs/Image (sensor-data QoS)
+    in   /camera/front/image_raw   sensor_msgs/Image (reliable, depth 1; see image_reliability)
     out  /perception/detection     perception_msgs/Detection (only when a person is seen)
 
 Parameters (all optional, see declare_parameter below for defaults)
-    triton_url, model_name, min_confidence, triton_timeout_s
+    triton_url, model_name, min_confidence, triton_timeout_s, image_topic, detection_topic,
+    image_reliability
 """
 
 import os
@@ -19,16 +20,18 @@ import numpy as np
 import rclpy
 import tritonclient.grpc as grpcclient
 from cv_bridge import CvBridge
+from perception_msgs.msg import Detection
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from tritonclient.utils import InferenceServerException
 
-from perception_msgs.msg import Detection
+from perception.image_qos import IMAGE_RELIABILITY, image_qos
 
 INPUT_SIZE = 640        # fixed by config.pbtxt: dims [3, 640, 640]
 MIN_CONFIDENCE = 0.5    # default threshold; below it a frame counts as "no person"
 PERSON_ROW = 4          # rows 0-3 = box, then 80 class scores; person is class 0
+IMAGE_TOPIC = "/camera/front/image_raw"        # default input (sim camera bridge)
+DETECTION_TOPIC = "/perception/detection"      # default output
 
 
 class YoloPersonDetector(Node):
@@ -44,22 +47,30 @@ class YoloPersonDetector(Node):
         self.model_name = self.declare_parameter("model_name", "yolo_person").value
         self.min_confidence = self.declare_parameter("min_confidence", MIN_CONFIDENCE).value
         self.triton_timeout_s = self.declare_parameter("triton_timeout_s", 0.1).value
+        # Topic names are parameters so the same node runs on a real camera (SITL values here).
+        self.image_topic = self.declare_parameter("image_topic", IMAGE_TOPIC).value
+        self.detection_topic = self.declare_parameter("detection_topic", DETECTION_TOPIC).value
+        self.image_reliability = self.declare_parameter(
+            "image_reliability", IMAGE_RELIABILITY).value
 
         # Converts ROS Image <-> numpy; made once, reused every frame
         self.bridge = CvBridge()
         # gRPC client for the shared Triton server (connects on first infer)
         self.triton = grpcclient.InferenceServerClient(url=self.triton_url)
 
-        # Input: camera frames. Sensor-data QoS (best effort, small queue)
-        # drops stale frames instead of building up lag.
+        # Input: camera frames, depth 1 so a slow frame never queues up behind older ones.
         self.sub = self.create_subscription(
-            Image, "/camera/front/image_raw", self.on_image, qos_profile_sensor_data)
+            Image, self.image_topic, self.on_image, self.image_qos(self.image_reliability))
         # Output: one Detection per frame that contains a person
-        self.pub = self.create_publisher(Detection, "/perception/detection", 10)
+        self.pub = self.create_publisher(Detection, self.detection_topic, 10)
 
         self.get_logger().info(
             f"Ready: triton={self.triton_url} model={self.model_name} "
-            f"min_confidence={self.min_confidence} timeout={self.triton_timeout_s}s")
+            f"min_confidence={self.min_confidence} timeout={self.triton_timeout_s}s "
+            f"image={self.image_topic}({self.image_reliability})")
+
+    # Kept as a method so callers and tests can still use YoloPersonDetector.image_qos(...)
+    image_qos = staticmethod(image_qos)
 
     def on_image(self, msg):
         """Handle one camera frame: run YOLO and publish the best person, if any."""

@@ -31,8 +31,11 @@ LOG_DIR = "/tmp/halo-check"
 VEHICLE = os.path.join(REPO, "scripts", "sitl_vehicle")
 SPAWN_PERSON = os.path.join(REPO, "Perception", "scripts", "spawn_person.sh")
 
-WORLD_SERVICE = "/world/default/create"   # same service scripts/fly waits for
+DEFAULT_WORLD = "default"
+# The service the launcher waits for. main() rebuilds it from --world / PX4_GZ_WORLD.
+WORLD_SERVICE = "/world/%s/create" % os.environ.get("PX4_GZ_WORLD", DEFAULT_WORLD)
 SIM_TIMEOUT_S = 90.0
+BIG_WORLD_TIMEOUT_S = 300.0   # a non-default world (e.g. baylands) loads large meshes
 TOPIC_TIMEOUT_S = 20.0
 CAMERA_RATE_WINDOW_S = 10.0
 CAMERA_RATE_PASS_HZ = 12.0
@@ -71,7 +74,7 @@ LIMIT_ORBIT_STRAFE = 1.5   # Movement's orbit-only speed cap (max_orbit_speed_m_
 LIMIT_YAW_DEG_S = 45.0
 LIMIT_SLACK = 1.001
 LEFTOVER_PATTERN = r"px4|gz sim|MicroXRCE|parameter_bridge|ros2 launch|yolo_person|tracking_node|" \
-                   r"geolocation_node|movement_node|sitl_vehicle (link|trace)"
+                   r"geolocation_node|movement_node|rqt_image_view|sitl_vehicle (link|trace)"
 
 SPEED = 1.0           # --speed: Gazebo real-time factor requested through PX4_SIM_SPEED_FACTOR
 results = []          # (name, status, detail)
@@ -99,12 +102,25 @@ def start(name, cmd, env=None):
 
 def stop(name, grace_s=8.0):
     proc = procs.pop(name, None)
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=grace_s)
+        except (subprocess.TimeoutExpired, ProcessLookupError):
+            pass
+    # The wrapper (`ros2 launch`) can exit before the node under it has finished, for example
+    # Movement is still leaving offboard. Give the rest of the group time to end by itself, and
+    # only then end what ignored SIGTERM (the viewer under `ros2 run` never exits on its own).
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(proc.pid, 0)       # signal 0: is anything left in the group?
+        except ProcessLookupError:
+            return
+        time.sleep(0.2)
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-        proc.wait(timeout=grace_s)
-    except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
@@ -272,10 +288,10 @@ class Probe:
         self.node.destroy_subscription(sub)
         return got
 
-    def rate(self, msg_type, topic, window_s):
+    def rate(self, msg_type, topic, window_s, qos=None):
         count = [0]
         sub = self.node.create_subscription(
-            msg_type, topic, lambda _m: count.__setitem__(0, count[0] + 1), self.qos)
+            msg_type, topic, lambda _m: count.__setitem__(0, count[0] + 1), qos or self.qos)
         end = time.monotonic() + window_s
         while time.monotonic() < end:
             self.rclpy.spin_once(self.node, timeout_sec=0.1)
@@ -379,11 +395,16 @@ def check_services(probe, have_triton):
     else:
         record("tracking", "FAIL", "no /tracking/position (see %s/tracking.log)" % LOG_DIR)
 
-    hz = probe.rate(Image, "/camera/front/image_raw", CAMERA_RATE_WINDOW_S)
+    # Reliable like the bridge publishes it: a best-effort reader of these 6 MB frames loses most
+    # of them (about 4 Hz of 15), which would be a measurement artefact, not a camera fault.
+    from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+    image_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                           history=HistoryPolicy.KEEP_LAST, depth=1)
+    hz = probe.rate(Image, "/camera/front/image_raw", CAMERA_RATE_WINDOW_S, image_qos)
     # The camera ticks in sim time, so at speed N it should arrive N times faster in wall time.
     status = ("PASS" if hz >= CAMERA_RATE_PASS_HZ * SPEED else
               "WARN" if hz >= CAMERA_RATE_WARN_HZ * SPEED else "FAIL")
-    record("camera_rate", status, "%.1f Hz best-effort (sim camera is %.0f Hz wall); gazebo side: %s"
+    record("camera_rate", status, "%.1f Hz reliable (sim camera is %.0f Hz wall); gazebo side: %s"
            % (hz, 15.0 * SPEED, gz_camera_rate()))
     rtf = gz_rtf()
     record("sim_speed", "SKIP" if rtf is None else "PASS" if rtf >= 0.9 * SPEED else "WARN",
@@ -444,7 +465,8 @@ def takeoff(args, fl):
 def movement_phase(args, fl):
     """Run Movement (follow or orbit) for a while and check what it did to the vehicle."""
     mode = ("orbit" if args.orbit else "follow") + (", tuned gains" if args.tuned else "")
-    cmd = ["ros2", "launch", "movement", "movement.launch.py"]
+    # debug: the per-command log line is DEBUG, and the checks below count those lines
+    cmd = ["ros2", "launch", "movement", "movement.launch.py", "log_level:=debug"]
     if args.tuned:
         cmd.append("params_file:=" + TUNED_PARAMS)
     if args.orbit:
@@ -532,7 +554,8 @@ def land(args, fl):
 
 def teardown():
     log("teardown")
-    for name in ("movement", "trace", "link", "tracking", "geolocation", "perception", "sim_links", "fly"):
+    for name in ("movement", "trace", "link", "tracking", "geolocation", "perception",
+                 "perception_gui", "sim_links", "fly"):
         stop(name)
     run(["ros2", "daemon", "stop"], timeout=15.0)
     time.sleep(2.0)
@@ -546,6 +569,9 @@ def main(argv=None):
     ap.add_argument("--gui", action="store_true")
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--skip-flight", action="store_true")
+    ap.add_argument("--world", default=os.environ.get("PX4_GZ_WORLD", DEFAULT_WORLD),
+                    help="Gazebo world to load, as PX4_GZ_WORLD (default: %(default)s), for "
+                         "example baylands; a non-default world gets a longer start-up wait")
     ap.add_argument("--orbit", action="store_true",
                     help="Movement orbits the person (%.0f s per lap) instead of following"
                     % ORBIT_PERIOD_S)
@@ -564,8 +590,11 @@ def main(argv=None):
                     help="diagnostic: do not run the background GCS heartbeat (PX4 may fail over)")
     args = ap.parse_args(argv)
     args.gui = args.gui or args.watch
-    global SPEED
+    global SPEED, WORLD_SERVICE
     SPEED = min(max(args.speed, 0.1), MAX_SPEED)
+    WORLD_SERVICE = "/world/%s/create" % args.world
+    sim_timeout_s = SIM_TIMEOUT_S if args.world == DEFAULT_WORLD else BIG_WORLD_TIMEOUT_S
+    world_env = {"PX4_GZ_WORLD": args.world, "HALO_SIM_WAIT_S": str(int(sim_timeout_s))}
     have_triton = bool(os.environ.get("HALO_TRITON_URL"))
 
     if world_up():
@@ -583,14 +612,14 @@ def main(argv=None):
         log("starting the simulator (%s)" % ("GUI" if args.gui else "headless"))
         if args.gui:
             start("fly", ["vglrun", "-d", "egl", os.path.join(REPO, "scripts", "fly")] + PX4_ARGS,
-                  dict(speed_env(), DISPLAY=":0", VGL_DISPLAY="egl"))
+                  dict(speed_env(), DISPLAY=":0", VGL_DISPLAY="egl", **world_env))
         else:
             start("fly", [os.path.join(REPO, "scripts", "fly")] + PX4_ARGS,
-                  dict(speed_env(), HEADLESS="1"))
-        up = wait_for(world_up, SIM_TIMEOUT_S)
+                  dict(speed_env(), HEADLESS="1", **world_env))
+        up = wait_for(world_up, sim_timeout_s)
         record("sim_up", "PASS" if up else "FAIL",
-               "world ready after %.0f s" % (time.monotonic() - t0) if up else
-               "no %s within %.0f s (see %s/fly.log)" % (WORLD_SERVICE, SIM_TIMEOUT_S, LOG_DIR))
+               "world '%s' ready after %.0f s" % (args.world, time.monotonic() - t0) if up else
+               "no %s within %.0f s (see %s/fly.log)" % (WORLD_SERVICE, sim_timeout_s, LOG_DIR))
         if not up:
             return 1
         if args.gui:
@@ -606,10 +635,21 @@ def main(argv=None):
                            "use_sim_time:=true"])
         if have_triton:
             start("perception", ["ros2", "launch", "perception", "perception.launch.py"]
-                  + (["min_confidence:=%g" % VIEW_MIN_CONFIDENCE] if args.views else []))
+                  + (["min_confidence:=%g" % VIEW_MIN_CONFIDENCE] if args.views else [])
+                  + (["overlay:=true"] if args.gui else []))   # also draws the box for the viewer
         if not args.no_link:
             start("link", [VEHICLE, "link"])    # keeps a ground station visible to PX4
-        run([SPAWN_PERSON, "6", "0", "0"], timeout=30.0)   # 6 m ahead = the follow distance
+        if args.gui:
+            # The camera image as Perception sees it, with the detected box drawn on it by
+            # detection_overlay, so the person can be watched without hunting for them in the 3D
+            # view (rqt_image_view, no vglrun: plain Qt widgets). Without Triton there is no
+            # detector and no overlay, so the plain camera image is shown instead.
+            view_topic = "/perception/debug_image" if have_triton else "/camera/front/image_raw"
+            start("perception_gui", ["ros2", "run", "rqt_image_view", "rqt_image_view",
+                                     view_topic], dict(speed_env(), DISPLAY=":0"))
+        # 6 m ahead = the follow distance
+        spawn_rc, spawn_out = run([SPAWN_PERSON, "6", "0", "0"], timeout=30.0)
+        log("spawn_person rc=%s: %s" % (spawn_rc, " ".join(spawn_out.split())[-160:]))
 
         flying = not args.skip_flight and not args.views and have_triton
         if not flying:

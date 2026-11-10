@@ -14,7 +14,6 @@ CameraGeometry camera() {
     c.center_x_px = 960.0;
     c.width_px = 1920.0;
     c.focal_x_px = 1000.0;
-    c.focal_y_px = 1000.0;
     return c;
 }
 
@@ -242,7 +241,7 @@ TEST(Sanitize, DistancesStayOrdered) {
     EXPECT_LE(s.safe_distance_m, s.max_distance_m);
 }
 
-// ---------- camera and range from the Detection box ----------
+// ---------- camera geometry ----------
 
 TEST(Camera, UsableOnlyWithFiniteCentreAndPositiveFocalLengthAndWidth) {
     EXPECT_TRUE(isUsable(camera()));
@@ -255,28 +254,6 @@ TEST(Camera, UsableOnlyWithFiniteCentreAndPositiveFocalLengthAndWidth) {
     c = camera();
     c.center_x_px = std::numeric_limits<double>::quiet_NaN();
     EXPECT_FALSE(isUsable(c));
-}
-
-TEST(Box, CentreIsTheMidpoint) {
-    EXPECT_DOUBLE_EQ(boxCenterX(900.0, 1020.0), 960.0);
-    EXPECT_DOUBLE_EQ(boxCenterX(0.0, 0.0), 0.0);
-}
-
-TEST(Box, RangeIsPersonHeightTimesFocalOverBoxHeight) {
-    const auto r = rangeFromBox(100.0, 200.0, 1000.0, 1.9);
-    ASSERT_TRUE(r.has_value());
-    EXPECT_NEAR(*r, 19.0, 1e-9);
-    EXPECT_NEAR(*rangeFromBox(0.0, 316.6667, 1000.0, 1.9), 6.0, 1e-4);
-}
-
-TEST(Box, UnusableInputsGiveNoRange) {
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    EXPECT_FALSE(rangeFromBox(100.0, 100.0, 1000.0, 1.9));   // zero height
-    EXPECT_FALSE(rangeFromBox(200.0, 100.0, 1000.0, 1.9));   // inverted box
-    EXPECT_FALSE(rangeFromBox(0.0, 100.0, 0.0, 1.9));        // no focal length
-    EXPECT_FALSE(rangeFromBox(0.0, 100.0, -5.0, 1.9));
-    EXPECT_FALSE(rangeFromBox(0.0, 100.0, 1000.0, 0.0));     // no person height
-    EXPECT_FALSE(rangeFromBox(nan, 100.0, 1000.0, 1.9));
 }
 
 // ---------- orbit mode ----------
@@ -473,24 +450,6 @@ TEST(OrbitLoop, PersonThatMovesStaysCentred) {
     EXPECT_LT(worst_bearing, 8.0);
 }
 
-// ---------- boxes cut off by the frame edge ----------
-
-TEST(Clipped, BoxTouchingTheBottomOrTopEdgeIsClipped) {
-    CameraGeometry c = camera();
-    c.height_px = 1080.0;
-    EXPECT_TRUE(boxTouchesFrameEdge(931.0, 1079.0, c));   // feet below the frame
-    EXPECT_TRUE(boxTouchesFrameEdge(931.0, 1078.0, c));   // exactly at the 2 px margin
-    EXPECT_FALSE(boxTouchesFrameEdge(931.0, 1077.9, c));
-    EXPECT_TRUE(boxTouchesFrameEdge(0.0, 500.0, c));      // head above the frame
-    EXPECT_TRUE(boxTouchesFrameEdge(2.0, 500.0, c));
-    EXPECT_FALSE(boxTouchesFrameEdge(2.1, 500.0, c));
-    EXPECT_FALSE(boxTouchesFrameEdge(100.0, 900.0, c));
-}
-
-TEST(Clipped, UnknownImageHeightNeverCountsAsClipped) {
-    EXPECT_FALSE(boxTouchesFrameEdge(0.0, 5000.0, camera()));  // camera() has height 0
-}
-
 // ---------- tunable gains and command smoothing ----------
 
 TEST(Gains, DefaultsAreTheOriginalControllersNumbers) {
@@ -598,6 +557,73 @@ TEST(Limiter, ResetStartsFromRestAndBadDtPassesThrough) {
     l.reset();
     EXPECT_NEAR(l.apply({0.7, 0.0, 0.0}, p, 0.1).forward_m_s, 0.1, 1e-12);
     EXPECT_DOUBLE_EQ(l.apply({0.7, 0.0, 0.0}, p, 0.0).forward_m_s, 0.7);
+}
+
+TEST(Smoothing, OffByDefaultAndSanitizeClampsIt) {
+    EXPECT_DOUBLE_EQ(FollowParams{}.command_smoothing_s, 0.0);
+    FollowParams p;
+    p.command_smoothing_s = 99.0;
+    EXPECT_DOUBLE_EQ(sanitize(p).command_smoothing_s, kCommandSmoothingCeilingS);
+    p.command_smoothing_s = -1.0;
+    EXPECT_DOUBLE_EQ(sanitize(p).command_smoothing_s, 0.0);
+    p.command_smoothing_s = std::nan("");
+    EXPECT_DOUBLE_EQ(sanitize(p).command_smoothing_s, kDefaultCommandSmoothingS);
+}
+
+TEST(Smoothing, LagsAFirstStepAndApproachesTheTargetWithoutOvershoot) {
+    FollowParams p;
+    p.command_smoothing_s = 0.5;
+    p = sanitize(p);
+    CommandLimiter l;
+    VelocityCommand c = l.apply({0.7, 0.0, 0.0}, p, 0.1);
+    EXPECT_GT(c.forward_m_s, 0.0);
+    EXPECT_LT(c.forward_m_s, 0.7 * 0.5);  // alpha = 0.1 / 0.6, so well short of the demand
+    double previous = c.forward_m_s;
+    for (int i = 0; i < 100; ++i) {
+        c = l.apply({0.7, 0.0, 0.0}, p, 0.1);
+        EXPECT_GE(c.forward_m_s, previous);  // monotonic: no overshoot or ringing
+        EXPECT_LE(c.forward_m_s, 0.7 + 1e-12);
+        previous = c.forward_m_s;
+    }
+    EXPECT_NEAR(c.forward_m_s, 0.7, 1e-6);
+}
+
+TEST(Smoothing, NeverExceedsTheAccelerationLimitAndBoundsTheJerk) {
+    FollowParams p;
+    p.max_forward_accel_m_s2 = 0.3;
+    p.max_yaw_accel_deg_s2 = 30.0;
+    p.command_smoothing_s = 0.4;
+    p = sanitize(p);
+    constexpr double dt = 0.1;
+    CommandLimiter l;
+    VelocityCommand prev;
+    double prev_accel = 0.0;
+    double max_jerk = 0.0;
+    for (int i = 0; i < 400; ++i) {
+        // Square wave demand, the harshest input: full forward, then full reverse.
+        const double sign = ((i / 50) % 2 == 0) ? 1.0 : -1.0;
+        const VelocityCommand c = l.apply({0.7 * sign, 0.0, 45.0 * sign}, p, dt);
+        const double accel = (c.forward_m_s - prev.forward_m_s) / dt;
+        EXPECT_LE(std::abs(accel), 0.3 + 1e-9);
+        EXPECT_LE(std::abs(c.yawspeed_deg_s - prev.yawspeed_deg_s) / dt, 30.0 + 1e-9);
+        EXPECT_LE(std::abs(c.forward_m_s), 0.7 + 1e-12);
+        max_jerk = std::max(max_jerk, std::abs(accel - prev_accel) / dt);
+        prev_accel = accel;
+        prev = c;
+    }
+    // Without the low-pass, acceleration steps by the full limit in one tick: 0.3 / 0.1 = 3 m/s^3.
+    EXPECT_LT(max_jerk, 0.5 * 0.3 / dt);
+}
+
+TEST(Smoothing, ResetAndBadDtBehaveAsWithoutIt) {
+    FollowParams p;
+    p.command_smoothing_s = 0.5;
+    p = sanitize(p);
+    CommandLimiter l;
+    for (int i = 0; i < 100; ++i) (void)l.apply({0.7, 0.0, 0.0}, p, 0.1);
+    l.reset();
+    EXPECT_LT(l.apply({0.7, 0.0, 0.0}, p, 0.1).forward_m_s, 0.7 * 0.5);  // starts from rest
+    EXPECT_DOUBLE_EQ(l.apply({0.7, 0.0, 0.0}, p, 0.0).forward_m_s, 0.7);  // bad dt: pass through
 }
 
 // ---------- search around the last known direction ----------

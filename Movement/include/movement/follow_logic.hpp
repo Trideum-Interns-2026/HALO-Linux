@@ -21,7 +21,6 @@ constexpr double kDefaultSearchYawRateDegS = 25.0;
 constexpr double kDefaultSearchForwardMps = 0.35;
 constexpr double kDefaultSearchStrafeMps = 0.45;
 constexpr double kDefaultSearchOrbitHz = 0.25;
-constexpr double kDefaultTargetPersonHeightM = 1.9;  // the Gazebo test person
 
 // Controller gains, from the original.
 constexpr double kForwardGain = 0.35;        // m/s per metre of distance error
@@ -68,6 +67,10 @@ constexpr double kDefaultAccelLimit = 0.0;
 constexpr double kForwardAccelCeilingMps2 = 5.0;
 constexpr double kStrafeAccelCeilingMps2 = 5.0;
 constexpr double kYawAccelCeilingDegS2 = 360.0;
+// Low-pass time constant (s) applied after the acceleration limit, so acceleration itself changes
+// smoothly (bounded jerk) instead of stepping. 0 = off. It only lags the command, never exceeds it.
+constexpr double kDefaultCommandSmoothingS = 0.0;
+constexpr double kCommandSmoothingCeilingS = 2.0;
 
 struct FollowParams {
     double safe_distance_m{kDefaultDistanceM};
@@ -93,6 +96,7 @@ struct FollowParams {
     double max_forward_accel_m_s2{kDefaultAccelLimit};
     double max_strafe_accel_m_s2{kDefaultAccelLimit};
     double max_yaw_accel_deg_s2{kDefaultAccelLimit};
+    double command_smoothing_s{kDefaultCommandSmoothingS};   // low-pass time constant, 0 = off
 };
 
 struct OrbitParams {
@@ -117,9 +121,7 @@ struct VelocityCommand {
 struct CameraGeometry {
     double center_x_px{0.0};  // principal point, K[2]
     double width_px{0.0};
-    double height_px{0.0};    // image height; 0 = unknown, then no box is treated as clipped
     double focal_x_px{0.0};   // K[0]
-    double focal_y_px{0.0};   // K[4]
 };
 
 [[nodiscard]] inline double clamp(double value, double min_value, double max_value) {
@@ -176,6 +178,8 @@ struct CameraGeometry {
                                     kStrafeAccelCeilingMps2);
     p.max_yaw_accel_deg_s2 = clamp(fin(p.max_yaw_accel_deg_s2, kDefaultAccelLimit), 0.0,
                                    kYawAccelCeilingDegS2);
+    p.command_smoothing_s = clamp(fin(p.command_smoothing_s, kDefaultCommandSmoothingS), 0.0,
+                                  kCommandSmoothingCeilingS);
     return p;
 }
 
@@ -300,61 +304,44 @@ struct CameraGeometry {
 
 // Smooths a command stream: each component may change by at most limit * dt per step, so a
 // target that jumps across the frame does not jerk the vehicle. A limit of 0 leaves that
-// component untouched. Starts from rest; call reset() when offboard (re)starts.
+// component untouched. Then an optional first-order low-pass (command_smoothing_s) rounds off the
+// acceleration steps: the result is a convex blend of in-bound values and a low-pass of a
+// rate-limited signal is rate-limited by the same amount, so no speed or acceleration limit is
+// ever exceeded. Starts from rest; call reset() when offboard (re)starts.
 class CommandLimiter {
 public:
-    void reset() { last_ = VelocityCommand{}; }
+    void reset() { last_ = VelocityCommand{}; out_ = VelocityCommand{}; }
     [[nodiscard]] VelocityCommand apply(const VelocityCommand& wanted, const FollowParams& p,
                                         double dt_s) {
         if (!isFinite(dt_s) || dt_s <= 0.0) {
-            return last_ = wanted;
+            return out_ = last_ = wanted;
         }
+        limit(wanted, p, dt_s);
+        if (p.command_smoothing_s <= 0.0) {
+            return out_ = last_;
+        }
+        const double alpha = dt_s / (p.command_smoothing_s + dt_s);
+        out_.forward_m_s += alpha * (last_.forward_m_s - out_.forward_m_s);
+        out_.right_m_s += alpha * (last_.right_m_s - out_.right_m_s);
+        out_.yawspeed_deg_s += alpha * (last_.yawspeed_deg_s - out_.yawspeed_deg_s);
+        return out_;
+    }
+
+private:
+    void limit(const VelocityCommand& wanted, const FollowParams& p, double dt_s) {
         last_.forward_m_s = step(last_.forward_m_s, wanted.forward_m_s,
                                  p.max_forward_accel_m_s2 * dt_s);
         last_.right_m_s = step(last_.right_m_s, wanted.right_m_s, p.max_strafe_accel_m_s2 * dt_s);
         last_.yawspeed_deg_s = step(last_.yawspeed_deg_s, wanted.yawspeed_deg_s,
                                     p.max_yaw_accel_deg_s2 * dt_s);
-        return last_;
     }
 
-private:
     // max_change <= 0 means unlimited.
     static double step(double from, double to, double max_change) {
         return max_change > 0.0 ? from + clamp(to - from, -max_change, max_change) : to;
     }
-    VelocityCommand last_;
+    VelocityCommand last_;  // after the acceleration limit
+    VelocityCommand out_;   // after the low-pass: what is sent
 };
-
-// Perception publishes a pixel box, not a range, so Movement derives the two numbers the
-// controller needs, the same way the original detector did.
-[[nodiscard]] inline double boxCenterX(double x_min_px, double x_max_px) {
-    return 0.5 * (x_min_px + x_max_px);
-}
-
-// A box touching the top or bottom of the image is cut off (a person whose feet are below the
-// frame, say), so its height is too small and the pinhole range far too big. Such a box says
-// nothing reliable about distance.
-constexpr double kFrameEdgeMarginPx = 2.0;
-[[nodiscard]] inline bool boxTouchesFrameEdge(double y_min_px, double y_max_px,
-                                              const CameraGeometry& c) {
-    return c.height_px > 0.0 &&
-           (y_min_px <= kFrameEdgeMarginPx || y_max_px >= c.height_px - kFrameEdgeMarginPx);
-}
-
-// Pinhole range: person_height_m * fy / box_height_px. Empty when the box or intrinsics are
-// unusable (the original accepted only finite, positive ranges).
-[[nodiscard]] inline std::optional<double> rangeFromBox(
-    double y_min_px, double y_max_px, double focal_y_px, double person_height_m) {
-    const double box_height = y_max_px - y_min_px;
-    if (!isFinite(box_height) || !isFinite(focal_y_px) || !isFinite(person_height_m) ||
-        box_height <= 0.0 || focal_y_px <= 0.0 || person_height_m <= 0.0) {
-        return std::nullopt;
-    }
-    const double range = person_height_m * focal_y_px / box_height;
-    if (!isFinite(range) || range <= 0.0) {
-        return std::nullopt;
-    }
-    return range;
-}
 
 }  // namespace movement

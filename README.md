@@ -46,7 +46,7 @@ Geolocation publishes `/geolocation/position`; Tracking publishes `/tracking/pos
 
 ### Movement
 
-`movement` is the Movement service (see [Movement/README.md](Movement/README.md)). The old
+`movement` is the Movement service (see [Movement/README.md](Movement/README.md)). It follows `/tracking/position` and needs `geolocation` and `tracking` running. The old
 waypoint test is still available:
 
 ```bash

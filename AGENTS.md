@@ -17,7 +17,7 @@ interface and tests, and no one service is the template or the priority. The rul
 | Perception | Cohen | Find a person in camera images | camera image (ROS 2) | `perception_msgs/Detection`: header, confidence, bounding box in pixels | `Perception/`, `perception_msgs/` (done) |
 | Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | `geolocation_msgs/GeolocationState` (see "Position output format") | `Geolocation/`, `geolocation_msgs/` |
 | Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | `tracking_msgs/TrackingState`, same format as Geolocation | `Tracking/`, `tracking_msgs/` |
-| Movement | Lisa | Follow the person: keep them centred in the camera at a set distance, scan when lost | `perception_msgs/Detection` + `camera_info` (ROS 2) | vehicle motion only, sent over MAVLink (offboard velocity today; goto is still open) | `Movement/` (port of Lisa's `follow_person`), old `Src/move.cpp` waypoint test |
+| Movement | Lisa | Follow the person at a set distance, scan when lost | `tracking_msgs/TrackingState` (`/tracking/position`, person) + `geolocation_msgs/GeolocationState` (`/geolocation/position`, drone) + `camera_info` (ROS 2); drone heading from MAVSDK attitude (MAVLink) | vehicle motion only, sent over MAVLink as bounded offboard velocity commands (goto is still an open question) | `Movement/` (port of Lisa's `follow_person`), old `Src/move.cpp` waypoint test |
 | UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | no code yet |
 
 Design decisions already made:
@@ -26,9 +26,9 @@ Design decisions already made:
   LLA plus an error triplet in ECEF (see below). Only what they locate and their inputs differ.
 - Range to the person is internal to Tracking, not a published output. The expected human height
   error is folded into the error triplet. That is why `Detection` has no distance field.
-- Movement commands the vehicle only over MAVLink, NOT ROS, and owns centering the target in the
-  camera. Today it follows the `Detection` box (Lisa's controller); the plan is to follow the Tracking
-  position with goto commands (see "Open questions").
+- Movement commands the vehicle only over MAVLink, NOT ROS, and owns following the person. Today it
+  follows the Tracking position (Lisa's follow/orbit controller) with bounded offboard velocity
+  commands; goto is still an open question (see "Open questions").
 - The UI must NOT connect directly to ROS or the drone. A ROS-side bridge node translates data to
   web formats and serves it over the network (HTTP); MAVLink may be used for drone health.
 - The old C++ tracking/follow code is gone (replaced by Tracking and Movement). `Src/move.cpp` is the
@@ -140,9 +140,10 @@ gz topic -l | grep image
 
 ```
 camera (sim/HW) ──ROS 2──> Perception ──Detection──────────────┐
-drone GPS + perception ──> Geolocation ──drone LLA + error──┬──> Tracking ──person LLA + error──┬──> Movement ──MAVLink goto──> vehicle
+drone GPS + perception ──> Geolocation ──drone LLA + error──┬──> Tracking ──person LLA + error──┬──> Movement ──MAVLink offboard velocity──> vehicle
                                                              │                                   └──> UI bridge node ──HTTP──> website
-                                                             └──────────────────────────────────────> UI bridge node
+                                                             ├──────────────────────────────────────> UI bridge node
+                                                             └──────────────────────────────────────> Movement
 vehicle telemetry (MAVLink) ──> QGroundControl, UI bridge node (drone health)
 ```
 

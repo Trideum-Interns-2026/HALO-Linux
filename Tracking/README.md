@@ -41,6 +41,13 @@ metres.
 | `camera_roll_deg` | `0.0` | Camera mounting roll relative to vehicle FRD |
 | `camera_pitch_deg` | `0.0` | Camera mounting pitch relative to vehicle FRD |
 | `camera_yaw_deg` | `0.0` | Camera mounting yaw relative to vehicle FRD |
+| `frame_edge_margin_px` | `12.0` | Boxes with `y_min <= margin` or `y_max >= height - margin` are not published; clamped to 0..100 |
+
+Detections whose box touches the top or bottom image edge (within `frame_edge_margin_px`) are
+dropped: the clipped box is too short, so pinhole ranging would place the person too far away.
+The image height comes from `camera_info.height`; if it is 0 (unknown), nothing counts as clipped.
+The default margin is 12 px because a truncated person's box edge lands a few model pixels inside the
+frame and the 1920x1080 image is letterboxed to 640x640 (1 model pixel = 3 image pixels).
 
 ## Run
 

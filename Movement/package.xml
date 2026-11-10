@@ -3,7 +3,7 @@
 <package format="3">
   <name>movement</name>
   <version>0.1.0</version>
-  <description>HALO movement service: follows a person at a set distance, keeping them centred in the camera, using offboard velocity commands; scans for them when lost.</description>
+  <description>HALO movement service: follows the tracked person position at a set distance, keeping them centred in the camera, using offboard velocity commands; scans for them when lost.</description>
   <maintainer email="lisa.huang@ascte.org">Lisa Huang</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,7 +11,8 @@
 
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
-  <depend>perception_msgs</depend>
+  <depend>tracking_msgs</depend>
+  <depend>geolocation_msgs</depend>
   <!-- MAVSDK has no rosdep key; it is installed from the libmavsdk-dev .deb by the Dockerfile and CI -->
 
   <exec_depend>launch</exec_depend>

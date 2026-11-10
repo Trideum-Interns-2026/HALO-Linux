@@ -10,11 +10,15 @@ on:
     paths:
       - "Movement/**"
       - "perception_msgs/**"
+      - "tracking_msgs/**"
+      - "geolocation_msgs/**"
       - ".github/workflows/movement-tests.yml"
   pull_request:
     paths:
       - "Movement/**"
       - "perception_msgs/**"
+      - "tracking_msgs/**"
+      - "geolocation_msgs/**"
       - ".github/workflows/movement-tests.yml"
 
 concurrency:
@@ -63,8 +67,8 @@ jobs:
           CCACHE_DIR: /tmp/ccache
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --base-paths Movement perception_msgs \
-            --packages-select perception_msgs movement \
+          colcon build --base-paths Movement tracking_msgs geolocation_msgs \
+            --packages-select tracking_msgs geolocation_msgs movement \
             --parallel-workers "$(nproc)" \
             --cmake-args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -72,7 +76,7 @@ jobs:
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash
-          colcon test --base-paths Movement perception_msgs \
-            --packages-select perception_msgs movement \
+          colcon test --base-paths Movement tracking_msgs geolocation_msgs \
+            --packages-select tracking_msgs geolocation_msgs movement \
             --event-handlers console_direct+
           colcon test-result --verbose

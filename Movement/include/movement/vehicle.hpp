@@ -15,6 +15,8 @@ struct Status {
 struct VehicleState {
     bool armed{false};
     bool in_air{false};
+    // Heading in degrees from true north, clockwise, in [0, 360). nullopt = unknown.
+    std::optional<double> heading_deg;
 };
 
 class VehicleInterface {

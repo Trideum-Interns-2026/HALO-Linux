@@ -27,6 +27,7 @@ setup(
     entry_points={
         "console_scripts": [
             "yolo_person_detector = perception.yolo_person_detector:main",
+            "detection_overlay = perception.detection_overlay:main",
         ],
     },
 )

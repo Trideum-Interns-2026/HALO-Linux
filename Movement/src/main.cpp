@@ -2,6 +2,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
+#include "movement/heading_freshness.hpp"
 #include "movement/mavsdk_vehicle.hpp"
 #include "movement/movement_node.hpp"
 
@@ -20,11 +21,13 @@ int main(int argc, char** argv) {
         auto params = std::make_shared<rclcpp::Node>("movement_params");
         const std::string url =
             params->declare_parameter("mavsdk_url", std::string(kDefaultMavsdkUrl));
+        const double heading_timeout_s = movement::sanitizeHeadingTimeout(
+            params->declare_parameter("heading_timeout_s", movement::kDefaultHeadingTimeoutS));
         params.reset();
 
         auto node = std::make_shared<movement::MovementNode>(
-            std::make_unique<movement::MavsdkVehicle>(url));
-        RCLCPP_INFO(logger, "MAVSDK url: %s", url.c_str());
+            std::make_unique<movement::MavsdkVehicle>(url, heading_timeout_s),
+            rclcpp::NodeOptions(), url, heading_timeout_s);
         try {
             rclcpp::spin(node);
         } catch (...) {

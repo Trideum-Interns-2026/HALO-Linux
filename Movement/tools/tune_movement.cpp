@@ -38,14 +38,13 @@ constexpr double kSettleS = 6.0;               // ...after this long
 constexpr double kMaxRadiusErrorM = 1.0;
 constexpr double kMaxStepSettleS = 12.0;       // follow step: bearing < 5 deg and range within 0.5 m by then
 constexpr double kTrackingWeight = 0.15;      // cost per deg^2 of mean squared bearing
+constexpr double kJerkWeight = 0.02;          // cost of the squared rate of change of acceleration
 
 CameraGeometry camera() {
     CameraGeometry c;
     c.center_x_px = kImageWidthPx / 2.0;
     c.width_px = kImageWidthPx;
-    c.height_px = 1080.0;
     c.focal_x_px = kFocalPx;
-    c.focal_y_px = kFocalPx;
     return c;
 }
 
@@ -74,6 +73,7 @@ struct Sample {
 
 struct Metrics {
     double smoothness{0.0};      // integral of (rate of change of command)^2, normalised
+    double jerk{0.0};            // integral of (rate of change of that)^2, normalised
     double worst_bearing{0.0};   // after the settle time
     double worst_radius_err{0.0};
     double unsettled_until{0.0};  // last time the person was off-centre (>5 deg) or off-range (>0.5 m)
@@ -106,11 +106,13 @@ Metrics run(Mode mode, const FollowParams& p, const OrbitParams& o, double durat
     Sample held{kImageWidthPx / 2.0, 6.0};
     bool have_held = false;
     VelocityCommand prev;
+    VelocityCommand prev_dc;
     double next_detection = 0.0, last_angle = std::atan2(-d.x, -d.y);
     const CameraGeometry cam = camera();
 
     for (double t = 0.0; t < duration_s; t += kStepS) {
-        // Camera: a detection every kDetectionPeriodS, arriving kDetectionLatencyS later.
+        // Camera: a target fix every plant.detection_period_s, arriving plant.detection_latency_s
+        // later (Perception, Tracking and the controller's input are all folded into these two).
         const double b = bearingDeg(d, person);
         if (t >= next_detection) {
             next_detection += plant.detection_period_s;
@@ -150,6 +152,11 @@ Metrics run(Mode mode, const FollowParams& p, const OrbitParams& o, double durat
         m.smoothness += kStepS * (std::pow(dc.forward_m_s / 1.0, 2) +
                                   std::pow(dc.right_m_s / 1.0, 2) +
                                   std::pow(dc.yawspeed_deg_s / 60.0, 2));
+        m.jerk += kStepS * (std::pow((dc.forward_m_s - prev_dc.forward_m_s) / kStepS, 2) +
+                            std::pow((dc.right_m_s - prev_dc.right_m_s) / kStepS, 2) +
+                            std::pow((dc.yawspeed_deg_s - prev_dc.yawspeed_deg_s) / kStepS / 60.0,
+                                     2));
+        prev_dc = dc;
         prev = cmd;
 
         // Plant: first-order lags, then integrate.
@@ -206,7 +213,7 @@ Score score(const FollowParams& p, const OrbitParams& o) {
         for (const auto& sc : scenarios) {
             const Metrics m = run(sc.mode, p, o, sc.duration, plant);
             const double mean_sq = m.bearing_n > 0 ? m.bearing_sq_sum / m.bearing_n : 0.0;
-            total += m.smoothness + kTrackingWeight * mean_sq;
+            total += m.smoothness + kJerkWeight * m.jerk + kTrackingWeight * mean_sq;
             const bool orbit = sc.mode == Mode::OrbitCcw || sc.mode == Mode::OrbitCw;
             std::string why;
             if (m.lost) why = "person left the field of view";
@@ -235,12 +242,14 @@ Score score(const FollowParams& p, const OrbitParams& o) {
 int main(int argc, char** argv) {
     const OrbitParams orbit = sanitize(OrbitParams{true, false, kDefaultOrbitPeriodS,
                                                    kDefaultOrbitSpeedMps});
-    if (argc == 8) {  // movement_tune yaw lateral forward ki a_fwd a_strafe a_yaw  -> score it
+    // movement_tune yaw lateral forward ki a_fwd a_strafe a_yaw [smoothing_s]  -> score it
+    if (argc == 8 || argc == 9) {
         FollowParams p;
         p.yaw_gain = std::atof(argv[1]); p.lateral_gain = std::atof(argv[2]);
         p.forward_gain = std::atof(argv[3]); p.orbit_yaw_ki = std::atof(argv[4]);
         p.max_forward_accel_m_s2 = std::atof(argv[5]); p.max_strafe_accel_m_s2 = std::atof(argv[6]);
         p.max_yaw_accel_deg_s2 = std::atof(argv[7]);
+        if (argc == 9) p.command_smoothing_s = std::atof(argv[8]);
         const Score s = score(sanitize(p), orbit);
         std::printf("score %.2f  %s%s\n", s.value, s.ok ? "ok" : "FAILS: ", s.why.c_str());
         return s.ok ? 0 : 1;
@@ -259,13 +268,15 @@ int main(int argc, char** argv) {
     const double fwd_acc[] = {0.15, 0.3, 0.5, 1.0, 0.0};
     const double strafe_acc[] = {0.15, 0.3, 0.6, 1.0, 0.0};
     const double yaw_acc[] = {15.0, 30.0, 60.0, 120.0, 0.0};
+    const double smoothing[] = {0.0, 0.1, 0.2, 0.3};
     long tried = 0;
     for (double yg : yaw_gains) for (double lg : lateral_gains) for (double fg : forward_gains)
     for (double ki : kis) for (double fa : fwd_acc) for (double sa : strafe_acc)
-    for (double ya : yaw_acc) {
+    for (double ya : yaw_acc) for (double sm : smoothing) {
         FollowParams p;
         p.yaw_gain = yg; p.lateral_gain = lg; p.forward_gain = fg; p.orbit_yaw_ki = ki;
         p.max_forward_accel_m_s2 = fa; p.max_strafe_accel_m_s2 = sa; p.max_yaw_accel_deg_s2 = ya;
+        p.command_smoothing_s = sm;
         p = sanitize(p);
         ++tried;
         const Score s = score(p, orbit);
@@ -274,14 +285,14 @@ int main(int argc, char** argv) {
     std::sort(good.begin(), good.end(),
               [](const Candidate& a, const Candidate& b) { return a.value < b.value; });
     std::printf("tried %ld combinations, %zu keep the person centred\n", tried, good.size());
-    std::printf("%-9s %-5s %-5s %-5s %-4s %-5s %-5s %-5s\n", "smooth", "yaw", "lat", "fwd", "ki",
-                "a_fwd", "a_str", "a_yaw");
+    std::printf("%-9s %-5s %-5s %-5s %-4s %-5s %-5s %-5s %-5s\n", "score", "yaw", "lat", "fwd", "ki",
+                "a_fwd", "a_str", "a_yaw", "tau");
     for (size_t i = 0; i < std::min<size_t>(good.size(), 8); ++i) {
         const auto& g = good[i];
-        std::printf("%-9.1f %-5.2f %-5.2f %-5.2f %-4.0f %-5.1f %-5.1f %-5.0f\n", g.value,
+        std::printf("%-9.1f %-5.2f %-5.2f %-5.2f %-4.0f %-5.1f %-5.1f %-5.0f %-5.2f\n", g.value,
                     g.p.yaw_gain, g.p.lateral_gain, g.p.forward_gain, g.p.orbit_yaw_ki,
                     g.p.max_forward_accel_m_s2, g.p.max_strafe_accel_m_s2,
-                    g.p.max_yaw_accel_deg_s2);
+                    g.p.max_yaw_accel_deg_s2, g.p.command_smoothing_s);
     }
     return good.empty() ? 1 : 0;
 }

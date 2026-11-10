@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import rclpy
 from cv_bridge import CvBridge
+from rclpy.qos import HistoryPolicy, ReliabilityPolicy
 from tritonclient.utils import InferenceServerException
 
 from perception.yolo_person_detector import YoloPersonDetector
@@ -96,6 +97,24 @@ def test_parameters_have_documented_defaults(node):
     assert node.get_parameter("model_name").value == "yolo_person"
     assert node.get_parameter("min_confidence").value == pytest.approx(0.5)
     assert node.get_parameter("triton_timeout_s").value == pytest.approx(0.1)
+    assert node.get_parameter("image_topic").value == "/camera/front/image_raw"
+    assert node.get_parameter("detection_topic").value == "/perception/detection"
+    assert node.get_parameter("image_reliability").value == "reliable"
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("reliable", ReliabilityPolicy.RELIABLE),
+    ("best_effort", ReliabilityPolicy.BEST_EFFORT),
+    ("BEST_EFFORT", ReliabilityPolicy.BEST_EFFORT),   # case does not matter
+    ("nonsense", ReliabilityPolicy.RELIABLE),         # unknown falls back to the sim default
+    (None, ReliabilityPolicy.RELIABLE),
+])
+def test_image_qos_reliability_and_newest_frame_only(value, expected):
+    """The camera QoS follows image_reliability and always keeps only the newest frame."""
+    qos = YoloPersonDetector.image_qos(value)
+    assert qos.reliability == expected
+    assert qos.history == HistoryPolicy.KEEP_LAST
+    assert qos.depth == 1
 
 
 def test_min_confidence_parameter_is_used(node):

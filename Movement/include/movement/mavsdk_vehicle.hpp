@@ -9,6 +9,7 @@
 #include <mavsdk/plugins/offboard/offboard.h>
 #include <mavsdk/plugins/telemetry/telemetry.h>
 
+#include "movement/heading_freshness.hpp"
 #include "movement/vehicle.hpp"
 
 namespace movement {
@@ -17,7 +18,10 @@ class MavsdkVehicle : public VehicleInterface {
 public:
     // Throws std::runtime_error if the connection URL is rejected. Finding the vehicle itself
     // is non-blocking: state() returns nullopt until it appears.
-    explicit MavsdkVehicle(const std::string& connection_url);
+    // `heading_timeout_s`: the heading is dropped when the attitude timestamp stops advancing
+    // for longer than this (sanitized to [kMinHeadingTimeoutS, kMaxHeadingTimeoutS]).
+    explicit MavsdkVehicle(const std::string& connection_url,
+                           double heading_timeout_s = kDefaultHeadingTimeoutS);
 
     std::optional<VehicleState> state() override;
     Status arm() override;
@@ -31,6 +35,7 @@ private:
     bool connectIfNeeded();
 
     mavsdk::Mavsdk mavsdk_;
+    HeadingFreshness heading_freshness_;
     std::shared_ptr<mavsdk::System> system_;
     std::unique_ptr<mavsdk::Action> action_;
     std::unique_ptr<mavsdk::Offboard> offboard_;
