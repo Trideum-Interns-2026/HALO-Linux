@@ -62,9 +62,11 @@ can watch what Perception sees. It is off by default; start it with `overlay:=tr
 | `publish_compressed` | `false` (`compressed:=true` in the launch file) | also publish JPEG on `<output_topic>/compressed` |
 | `jpeg_quality` | `80` | JPEG quality 0-100 |
 
-View it: start the stack with `overlay:=true` and run
-`ros2 run rqt_image_view rqt_image_view /perception/debug_image/compressed` (the JPEG topic is much
-smoother than the raw one). `sim_check --gui` does both.
+View it: start the stack with `overlay:=true` and run `ros2 run perception debug_view`. It reads the
+JPEG topic `/perception/debug_image/compressed` and shows only the newest frame in an OpenCV window
+(close it or press q / Esc to quit). Parameters: `topic`, `window_name`, `image_reliability`.
+`rqt_image_view` cannot read that topic here (no `compressed_image_transport`) and was slow on the
+raw image. `sim_check --gui` starts the overlay and `debug_view` for you.
 
 ## Run
 
