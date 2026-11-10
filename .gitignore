@@ -38,8 +38,3 @@ infra/triton/model_repository/*/[0-9]*/
 *.engine
 .env
 
-# Claude Code: personal/local files stay out of git (the shared .claude/ config is tracked)
-.claude/settings.local.json
-.claude/.ruff_cache/
-.claude/agent-memory-local/
-CLAUDE.local.md
