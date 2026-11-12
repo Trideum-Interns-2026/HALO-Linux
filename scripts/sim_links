@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Sim-only data links the services need, run next to `fly` in its own terminal:
+#   - GPS:   Gazebo navsat -> /gps/fix (Geolocation input)
+#   - PX4:   uXRCE-DDS agent -> /fmu/out/... (Tracking reads vehicle_attitude)
+# Both stop on Ctrl+C. Not used on real hardware, where a driver / the FC's own link does this.
+set -Ee -o pipefail
+
+source /opt/ros/jazzy/setup.bash
+[[ -f /opt/px4_ros2/install/setup.bash ]] && source /opt/px4_ros2/install/setup.bash
+[[ -f /opt/ros2_ws/install/setup.bash ]] && source /opt/ros2_ws/install/setup.bash
+
+XRCE_PORT="${HALO_XRCE_PORT:-8888}"   # PX4 SITL's uxrce_dds_client default (UXRCE_DDS_PRT)
+
+pids=()
+cleanup() {
+    trap - EXIT INT TERM
+    for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+setsid MicroXRCEAgent udp4 -p "$XRCE_PORT" &
+pids+=($!)
+setsid ros2 launch /workspace/Perception/launch/gz_gps_bridge.launch.py &
+pids+=($!)
+
+echo "sim_links: uXRCE-DDS agent on udp/$XRCE_PORT and GPS bridge to /gps/fix running"
+wait -n

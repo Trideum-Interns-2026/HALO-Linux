@@ -15,7 +15,7 @@ The system is split into microservices, each with its own owner, interface and t
 | Perception | Find a person in camera images, publish `perception_msgs/Detection` | [Perception/](Perception/README.md), `perception_msgs/` |
 | Geolocation | Estimate the drone's own position | [`Geolocation/`](Geolocation/README.md), [`geolocation_msgs/`](geolocation_msgs/) |
 | Tracking | Estimate the person's position | [`Tracking/`](Tracking/README.md), [`tracking_msgs/`](tracking_msgs/) |
-| Movement | Follow the person, commanded over MAVLink | Older C++ programs in `Src/` |
+| Movement | Follow the person, commanded over MAVLink | [`Movement/`](Movement/README.md) (ported from Lisa's follow_person); older `Src/move.cpp` |
 | UI/UX | Web view of the drone's data through a ROS bridge node | Not started |
 
 ## Prerequisites
@@ -36,26 +36,25 @@ Docker, WSL2 (Ubuntu), QGroundControl. Code runs inside a dev container
 3. Terminal 2: `perceive` starts the camera bridge and the YOLO detector (Spark profile only,
    it needs Triton). Detections appear on `/perception/detection`.
 4. Optional: `spawn_person [x] [y] [yaw]` adds a test target (default 5 m ahead, facing the drone).
-5. Arm and take off in QGroundControl. `fly`, `tracking`, `geolocation` and `move` do not arm or
-   take off.
+5. Arm and take off in QGroundControl. `fly`, `tracking`, `geolocation`, `movement` and `move` do
+   not arm or take off.
 6. Start `geolocation` to filter `/gps/fix`, then start `tracking` to combine detections,
    camera calibration, Geolocation output and PX4 attitude.
 
 Check the output with `ros2 topic echo /perception/detection`.
 Geolocation publishes `/geolocation/position`; Tracking publishes `/tracking/position`.
 
-### Older movement programs
+### Movement
 
-The old follow-person demo still expects perception topics that the current Perception service no
-longer publishes. The Tracking service is the supported person-position estimator.
+`movement` is the Movement service (see [Movement/README.md](Movement/README.md)). It follows `/tracking/position` and needs `geolocation` and `tracking` running. The old
+waypoint test is still available:
 
 ```bash
 ./scripts/move <north_m> <east_m>   # short waypoint test, each offset <= 2 m, vehicle must be airborne
 ```
 
 `move` holds altitude, never arms, takes off or lands, and returns PX4 to Hold when it finishes,
-times out or is interrupted. The old `follow_person` path still expects perception topics that the
-current Perception service no longer publishes.
+times out or is interrupted.
 
 ## Building and testing
 
@@ -71,14 +70,14 @@ cd /workspace/Perception && python3 -m pytest test/ -v
 source /opt/ros/jazzy/setup.bash
 source /opt/px4_ros2/install/setup.bash
 cd /opt/ros2_ws && colcon build \
-  --packages-select perception_msgs geolocation_msgs geolocation tracking_msgs tracking \
+  --packages-select perception_msgs geolocation_msgs geolocation tracking_msgs tracking movement \
   --symlink-install
-colcon test --packages-select geolocation_msgs geolocation tracking_msgs tracking
+colcon test --packages-select geolocation_msgs geolocation tracking_msgs tracking movement
 colcon test-result --verbose
 
 # Older movement programs
 cmake -S /workspace -B /workspace/build
-cmake --build /workspace/build --target move follow_person
+cmake --build /workspace/build --target move
 ```
 
 CI runs each service's tests on push: `.github/workflows/`.
@@ -90,8 +89,9 @@ CI runs each service's tests on push: `.github/workflows/`.
 | `Perception/`, `perception_msgs/` | Perception service and its message package |
 | `Geolocation/`, `geolocation_msgs/` | Drone GPS filtering service and output interface |
 | `Tracking/`, `tracking_msgs/` | Person-position service and output interface |
-| `Src/` | Older C++ movement and follow programs |
-| `scripts/` | `fly`, `move`, `follow_person`, `spark/verify.sh` |
+| `Movement/` | Movement service (C++) |
+| `Src/` | Older C++ waypoint test (`move.cpp`) |
+| `scripts/` | `fly`, `move`, `spark/verify.sh` |
 | `infra/triton/` | Shared Triton Inference Server config and engine build script |
 | `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
 | `.devcontainer/`, `Dockerfile`, `docker-compose*.yml` | Dev container profiles (WSL2 and Spark) |

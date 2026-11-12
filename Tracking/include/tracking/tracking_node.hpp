@@ -34,6 +34,7 @@ public:
         declare_parameter("camera_roll_deg", 0.0);
         declare_parameter("camera_pitch_deg", 0.0);
         declare_parameter("camera_yaw_deg", 0.0);
+        declare_parameter("frame_edge_margin_px", tracking::kDefaultFrameEdgeMarginPx);
 
         detection_topic_ = get_parameter("detection_topic").as_string();
         camera_info_topic_ = get_parameter("camera_info_topic").as_string();
@@ -48,6 +49,8 @@ public:
         camera_roll_rad_ = toRadians(get_parameter("camera_roll_deg").as_double());
         camera_pitch_rad_ = toRadians(get_parameter("camera_pitch_deg").as_double());
         camera_yaw_rad_ = toRadians(get_parameter("camera_yaw_deg").as_double());
+        frame_edge_margin_px_ = tracking::sanitizeFrameEdgeMargin(
+            get_parameter("frame_edge_margin_px").as_double());
         validateParameters();
 
         detection_sub_ = create_subscription<perception_msgs::msg::Detection>(
@@ -70,14 +73,14 @@ public:
             "tracking ready: detection=%s camera_info=%s geolocation=%s attitude=%s "
             "output=%s human_height_m=%.3f human_height_stddev_m=%.3f "
             "pixel_stddev_px=%.3f minimum_confidence=%.3f maximum_input_age_s=%.3f "
-            "camera_mount_rpy_deg=(%.3f,%.3f,%.3f)",
+            "camera_mount_rpy_deg=(%.3f,%.3f,%.3f) frame_edge_margin_px=%.3f",
             detection_topic_.c_str(), camera_info_topic_.c_str(),
             geolocation_topic_.c_str(), vehicle_attitude_topic_.c_str(),
             output_topic_.c_str(), human_height_m_, human_height_stddev_m_,
             pixel_stddev_px_, minimum_confidence_, maximum_input_age_s_,
             camera_roll_rad_ * 180.0 / tracking::kPi,
             camera_pitch_rad_ * 180.0 / tracking::kPi,
-            camera_yaw_rad_ * 180.0 / tracking::kPi);
+            camera_yaw_rad_ * 180.0 / tracking::kPi, frame_edge_margin_px_);
     }
 
     void onCameraInfo(const sensor_msgs::msg::CameraInfo::SharedPtr message) {
@@ -91,6 +94,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         camera_ = tracking::CameraIntrinsics{
             message->k[0], message->k[4], message->k[2], message->k[5]};
+        image_height_px_ = static_cast<double>(message->height);
         camera_ready_ = true;
     }
 
@@ -139,6 +143,7 @@ public:
         }
 
         tracking::CameraIntrinsics camera;
+        double image_height_px = 0.0;
         geolocation_msgs::msg::GeolocationState geolocation;
         tracking::Quaternion attitude;
         rclcpp::Time geolocation_received_at(0, 0, get_clock()->get_clock_type());
@@ -152,6 +157,7 @@ public:
                 return;
             }
             camera = camera_;
+            image_height_px = image_height_px_;
             geolocation = geolocation_;
             attitude = attitude_;
             geolocation_received_at = geolocation_received_at_;
@@ -175,6 +181,16 @@ public:
             isStale(capture_time, position_time)) {
             RCLCPP_WARN_THROTTLE(
                 get_logger(), *get_clock(), 5000, "Skipping detection with stale pose inputs");
+            return;
+        }
+
+        // A box cut by the top or bottom edge is too short: ranging would place the person too
+        // far away. Publish nothing rather than a false position.
+        if (tracking::boxTouchesVerticalFrameEdge(
+                message->y_min, message->y_max, image_height_px, frame_edge_margin_px_)) {
+            RCLCPP_DEBUG_THROTTLE(
+                get_logger(), *get_clock(), 5000,
+                "Skipping detection clipped by the top or bottom image edge");
             return;
         }
 
@@ -241,6 +257,8 @@ private:
     double camera_roll_rad_{};
     double camera_pitch_rad_{};
     double camera_yaw_rad_{};
+    double frame_edge_margin_px_{tracking::kDefaultFrameEdgeMarginPx};
+    double image_height_px_{0.0};  // from camera_info.height; 0 = unknown
     tracking::CameraIntrinsics camera_{};
     geolocation_msgs::msg::GeolocationState geolocation_{};
     tracking::Quaternion attitude_{};

@@ -1,0 +1,82 @@
+# Builds the movement package and runs its tests on every push / PR that touches
+# it. Uses the plain ros:jazzy image (no PX4/Gazebo); the tests fake the vehicle.
+# MAVSDK is installed from the same release the Dockerfile uses, since the node
+# executable links it.
+name: movement-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Movement/**"
+      - "perception_msgs/**"
+      - "tracking_msgs/**"
+      - "geolocation_msgs/**"
+      - ".github/workflows/movement-tests.yml"
+  pull_request:
+    paths:
+      - "Movement/**"
+      - "perception_msgs/**"
+      - "tracking_msgs/**"
+      - "geolocation_msgs/**"
+      - ".github/workflows/movement-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache MAVSDK package
+        id: mavsdk
+        uses: actions/cache@v4
+        with:
+          path: /tmp/mavsdk.deb
+          key: mavsdk-3.17.1-ubuntu24.04
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates ccache \
+            ros-jazzy-ament-cmake-gtest \
+            ros-jazzy-ament-lint-auto ros-jazzy-ament-lint-common
+          if [ ! -f /tmp/mavsdk.deb ]; then
+            curl -fL -o /tmp/mavsdk.deb \
+              https://github.com/mavlink/MAVSDK/releases/download/v3.17.1/libmavsdk-dev_3.17.1_ubuntu24.04_amd64.deb
+          fi
+          apt-get install -y /tmp/mavsdk.deb
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-movement-${{ github.sha }}
+          restore-keys: ccache-movement-
+
+      - name: Build
+        env:
+          CCACHE_DIR: /tmp/ccache
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths Movement tracking_msgs geolocation_msgs \
+            --packages-select tracking_msgs geolocation_msgs movement \
+            --parallel-workers "$(nproc)" \
+            --cmake-args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --base-paths Movement tracking_msgs geolocation_msgs \
+            --packages-select tracking_msgs geolocation_msgs movement \
+            --event-handlers console_direct+
+          colcon test-result --verbose

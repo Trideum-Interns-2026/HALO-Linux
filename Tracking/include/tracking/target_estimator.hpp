@@ -33,6 +33,34 @@ struct DetectionBox {
     double y_max_px{};
 };
 
+// A truncated person's regressed box edge lands a few model pixels inside the frame, not exactly on
+// it, and the 1920x1080 frame is letterboxed to 640x640 (1 model pixel = 3 image pixels), so the
+// margin must cover several model pixels: 12 image pixels is 4 model pixels.
+constexpr double kDefaultFrameEdgeMarginPx = 12.0;
+constexpr double kMaxFrameEdgeMarginPx = 100.0;
+
+// True when the box touches the top or bottom image edge, so its height is cut off and pinhole
+// ranging would place the person too far away. Unknown image height never counts as clipped;
+// non-finite box values are not trusted and count as clipped.
+inline bool boxTouchesVerticalFrameEdge(
+    double y_min_px, double y_max_px, double image_height_px, double margin_px) {
+    if (!std::isfinite(image_height_px) || image_height_px <= 0.0) {
+        return false;
+    }
+    if (!std::isfinite(y_min_px) || !std::isfinite(y_max_px) || !std::isfinite(margin_px)) {
+        return true;
+    }
+    return y_min_px <= margin_px || y_max_px >= image_height_px - margin_px;
+}
+
+// Non-finite falls back to the default; otherwise clamped to [0, kMaxFrameEdgeMarginPx].
+inline double sanitizeFrameEdgeMargin(double margin_px) {
+    if (!std::isfinite(margin_px)) {
+        return kDefaultFrameEdgeMarginPx;
+    }
+    return std::min(std::max(margin_px, 0.0), kMaxFrameEdgeMarginPx);
+}
+
 struct Estimate {
     GeodeticPosition position;
     std::array<double, 3> error_ecef_3sigma_m{};

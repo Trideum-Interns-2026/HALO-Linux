@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <thread>
 
@@ -22,6 +23,37 @@ protected:
         rclcpp::shutdown();
     }
 };
+
+TEST_F(GeolocationNodeTest, PublishesNothingForNoFixOrNonFiniteInput) {
+    auto node = std::make_shared<GeolocationNode>();
+    auto observer = std::make_shared<rclcpp::Node>("geolocation_silent_observer");
+    int received = 0;
+    auto subscription = observer->create_subscription<geolocation_msgs::msg::GeolocationState>(
+        "/geolocation/position", rclcpp::QoS(10),
+        [&received](geolocation_msgs::msg::GeolocationState::SharedPtr) { ++received; });
+    (void)subscription;
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(observer);
+
+    auto no_fix = std::make_shared<sensor_msgs::msg::NavSatFix>();
+    no_fix->status.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+    no_fix->latitude = 34.7;
+    no_fix->longitude = -86.6;
+    no_fix->altitude = 200.0;
+    node->onGps(no_fix);
+
+    auto not_finite = std::make_shared<sensor_msgs::msg::NavSatFix>(*no_fix);
+    not_finite->status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+    not_finite->latitude = std::nan("");
+    EXPECT_NO_THROW(node->onGps(not_finite));
+    EXPECT_NO_THROW(node->onGps(nullptr));
+
+    for (int i = 0; i < 20; ++i) {
+        executor.spin_some();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(received, 0);
+}
 
 TEST_F(GeolocationNodeTest, CopiesFixHeaderAndPublishesEstimate) {
     auto node = std::make_shared<GeolocationNode>();

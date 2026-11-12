@@ -1,0 +1,29 @@
+# Movement gains tuned for the SIMULATOR (PX4 SITL x500 + Gazebo camera), for smooth motion.
+# Not for hardware: the vehicle, camera rate and PX4 gains are different there, so retune with
+# `movement_tune` (see README "Tuning") and the real vehicle's lag. The code defaults are
+# unchanged; load this file with `ros2 launch movement movement.launch.py params_file:=<path>`
+# (sim_check --tuned does).
+#
+# Found by tools/tune_movement.cpp: smoothest commands (acceleration and jerk) that still keep the
+# person within 12 deg of the image centre, the range within 1 m, a step settled in 12 s, and
+# orbit laps on time, on slow, nominal and fast vehicle models. Score 2.63 versus 4.76 for the
+# previous set (yaw 1.0, strafe accel 0.3, yaw accel 30, no smoothing) under the same jerk-aware
+# score. The old forward gain 0.35 cannot hold range on a person walking 0.5 m/s
+# (steady lag about 1.4 m), hence 0.5.
+/**:
+  ros__parameters:
+    yaw_gain: 0.8
+    lateral_gain: 0.35
+    forward_gain: 0.5
+    orbit_yaw_ki: 20.0
+    max_forward_accel_m_s2: 0.3
+    max_strafe_accel_m_s2: 0.15
+    max_yaw_accel_deg_s2: 15.0
+    # Low-pass after the acceleration limits: rounds off acceleration steps (low jerk). Searched
+    # together with the gains because lag in the loop costs stability (movement_tune, jerk term).
+    command_smoothing_s: 0.1
+    # On target loss: hold position and sweep the nose +-60 deg around where the person was last
+    # seen for 12 s (one full sweep), then fall back to the original spiral scan.
+    last_known_search_s: 12.0
+    last_known_sweep_deg: 60.0
+    last_known_rate_deg_s: 20.0

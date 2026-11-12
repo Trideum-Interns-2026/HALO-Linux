@@ -33,20 +33,23 @@ sim_pid=$!
 
 echo "Waiting for Gazebo to become ready..."
 service_ready=false
-for _ in {1..60}; do
+# PX4_GZ_WORLD picks the world (px4-gazebo reads it); "default" when unset. A big world (for
+# example baylands, which loads a 400 MB terrain) may need a longer wait: HALO_SIM_WAIT_S.
+world="${PX4_GZ_WORLD:-default}"
+for _ in $(seq 1 "${HALO_SIM_WAIT_S:-60}"); do
     if ! kill -0 "$sim_pid" 2>/dev/null; then
         wait "$sim_pid" || true
         echo "PX4/Gazebo exited before the world was ready." >&2
         exit 1
     fi
-    if gz service -l 2>/dev/null | grep -Fxq /world/default/create; then
+    if gz service -l 2>/dev/null | grep -Fxq "/world/${world}/create"; then
         service_ready=true
         break
     fi
     sleep 1
 done
 if [[ "$service_ready" != true ]]; then
-    echo "Timed out waiting for Gazebo's /world/default/create service." >&2
+    echo "Timed out waiting for Gazebo's /world/${world}/create service." >&2
     exit 1
 fi
 

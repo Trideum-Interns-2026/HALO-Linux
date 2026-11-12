@@ -13,6 +13,7 @@ setup(
         # Launch files, so `ros2 launch perception ...` can find them
         ("share/" + package_name + "/launch", [
             "launch/gz_harmonic_bridge.launch.py",
+            "launch/gz_gps_bridge.launch.py",
             "launch/perception.launch.py",
         ]),
     ],
@@ -26,6 +27,7 @@ setup(
     entry_points={
         "console_scripts": [
             "yolo_person_detector = perception.yolo_person_detector:main",
+            "detection_overlay = perception.detection_overlay:main",
         ],
     },
 )

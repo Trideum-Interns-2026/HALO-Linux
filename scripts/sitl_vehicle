@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Human-run SITL helper: arm, take off, land or disarm the simulated PX4 vehicle.
+
+Documented purpose (AGENTS.md, "Safety and hardware readiness"): this is the one program whose
+job is to arm and take off, and only against the simulator, on a command from a human.
+Never run it against a real vehicle.
+
+    sitl_vehicle arm | takeoff [alt_m] | land | disarm | status | position | link | trace [s]
+
+status    armed/disarmed and the PX4 flight mode (Hold, Offboard, Return, ...).
+position  local NED position (m), velocity (m/s) and yaw (deg), to show the vehicle moved.
+trace     CSV of position, velocity and yaw for [s] seconds at PX4's stream rate.
+link      keeps sending ground-station heartbeats until Ctrl+C/SIGTERM. Run it in the background
+          for the whole flight; without a GCS heartbeat PX4 fails over to Return/RTL.
+
+Connects with pymavlink as a ground station over tcp:127.0.0.1:5760, the Spark profile's MAVLink
+TCP bridge (the same one QGroundControl uses; it accepts several clients and forwards to PX4's GCS
+port). Not 14540: Movement (MAVSDK) binds that, and PX4 sends its API link there, so a second
+listener cannot coexist. On the WSL profile there is no bridge; pass --endpoint to a local port.
+"""
+
+import argparse
+import ipaddress
+import math
+import signal
+import sys
+import time
+
+DEFAULT_ENDPOINT = "tcp:127.0.0.1:5760"
+DEFAULT_TAKEOFF_ALT_M = 5.0
+MAX_TAKEOFF_ALT_M = 10.0
+HEARTBEAT_TIMEOUT_S = 10.0
+ACK_TIMEOUT_S = 5.0
+GCS_SYSTEM_ID = 255
+GCS_COMPONENT_ID = 190
+GCS_HEARTBEAT_COUNT = 3
+GCS_HEARTBEAT_PERIOD_S = 1.0
+LOCAL_HOSTS = {"localhost", "0.0.0.0", "127.0.0.1", "::1"}
+ALLOWED_SCHEMES = {"udpin", "udpout", "udp", "tcp", "tcpin"}
+
+
+def check_endpoint(endpoint):
+    """Raise ValueError unless the endpoint is a local network link (simulator only)."""
+    parts = endpoint.split(":")
+    if len(parts) < 3 or parts[0] not in ALLOWED_SCHEMES:
+        raise ValueError("endpoint must look like udpin:HOST:PORT, got %r" % endpoint)
+    host = parts[1]
+    if host not in LOCAL_HOSTS:
+        try:
+            if not ipaddress.ip_address(host).is_loopback:
+                raise ValueError
+        except ValueError:
+            raise ValueError("refusing non-local endpoint %r: SITL only" % endpoint) from None
+
+
+# PX4 custom_mode: main mode in bits 16-23, auto sub mode in bits 24-31.
+PX4_MAIN_MODES = {1: "Manual", 2: "Altitude", 3: "Position", 5: "Acro", 6: "Offboard",
+                  7: "Stabilized"}
+PX4_AUTO_MODES = {1: "Ready", 2: "Takeoff", 3: "Hold", 4: "Mission", 5: "Return", 6: "Land"}
+
+
+def px4_mode_name(custom_mode):
+    """Human name of a PX4 HEARTBEAT custom_mode (Hold, Offboard, Return, ...)."""
+    main = (int(custom_mode) >> 16) & 0xFF
+    sub = (int(custom_mode) >> 24) & 0xFF
+    if main == 4:
+        return PX4_AUTO_MODES.get(sub, "Auto(%d)" % sub)
+    return PX4_MAIN_MODES.get(main, "Unknown(%d)" % main)
+
+
+def check_altitude(alt_m):
+    """Return alt_m if it is within (0, MAX_TAKEOFF_ALT_M], else raise ValueError."""
+    if not 0.0 < alt_m <= MAX_TAKEOFF_ALT_M:
+        raise ValueError("takeoff altitude must be in (0, %.0f] m" % MAX_TAKEOFF_ALT_M)
+    return alt_m
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("action", choices=["arm", "takeoff", "land", "disarm", "status", "position", "link", "trace"])
+    ap.add_argument("altitude_m", nargs="?", type=float, default=DEFAULT_TAKEOFF_ALT_M,
+                    help="takeoff altitude in metres; for `trace`, the duration in seconds")
+    ap.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    args = ap.parse_args(argv)
+
+    try:
+        check_endpoint(args.endpoint)
+        if args.action == "takeoff":
+            check_altitude(args.altitude_m)
+    except ValueError as err:
+        print("error: %s" % err, file=sys.stderr)
+        return 2
+
+    from pymavlink import mavutil  # imported late so the checks above are testable without it
+
+    # Identify as a ground station the way QGroundControl does (system 255, component 190,
+    # MAV_COMP_ID_MISSIONPLANNER). pymavlink's default component 0 is ambiguous and can confuse
+    # other clients (MAVSDK in Movement) that see these heartbeats forwarded.
+    link = mavutil.mavlink_connection(args.endpoint, source_system=GCS_SYSTEM_ID,
+                                      source_component=GCS_COMPONENT_ID)
+    if args.endpoint.startswith("udpout"):
+        # udpout only learns PX4's address once it has sent something.
+        link.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GCS,
+                                mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+    if link.wait_heartbeat(timeout=HEARTBEAT_TIMEOUT_S) is None:
+        print("error: no heartbeat on %s (is `fly` running?)" % args.endpoint, file=sys.stderr)
+        return 1
+    cmd = mavutil.mavlink
+
+    # PX4's preflight check needs a ground-station heartbeat ("No connection to the GCS" otherwise),
+    # so act as one for a moment before commanding; without QGroundControl nobody else does.
+    if args.action == "link":
+        print("sending GCS heartbeats on %s (Ctrl+C to stop)" % args.endpoint)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        try:
+            while True:
+                link.mav.heartbeat_send(cmd.MAV_TYPE_GCS, cmd.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+                time.sleep(GCS_HEARTBEAT_PERIOD_S)
+        except KeyboardInterrupt:
+            return 0
+    if args.action in ("arm", "takeoff"):
+        for _ in range(GCS_HEARTBEAT_COUNT):
+            link.mav.heartbeat_send(cmd.MAV_TYPE_GCS, cmd.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+            time.sleep(GCS_HEARTBEAT_PERIOD_S)
+
+    def send(command, *params):
+        link.mav.command_long_send(link.target_system, link.target_component, command, 0,
+                                   *(list(params) + [0] * (7 - len(params))))
+        ack = link.recv_match(type="COMMAND_ACK", blocking=True, timeout=ACK_TIMEOUT_S)
+        ok = ack is not None and ack.command == command and ack.result == 0
+        print("%s: %s" % (cmd.enums["MAV_CMD"][command].name, "accepted" if ok else "REJECTED"))
+        return 0 if ok else 1
+
+    if args.action == "status":
+        # Only the autopilot's own heartbeat counts; a relayed GCS/companion heartbeat is
+        # "disarmed, mode 0" and made `status` flap while Movement was connected.
+        beat = link.recv_match(type="HEARTBEAT", blocking=True, timeout=HEARTBEAT_TIMEOUT_S,
+                               condition="HEARTBEAT.autopilot==%d" % cmd.MAV_AUTOPILOT_PX4)
+        if beat is None:
+            print("error: no heartbeat", file=sys.stderr)
+            return 1
+        armed = bool(beat.base_mode & cmd.MAV_MODE_FLAG_SAFETY_ARMED)
+        print("%s mode=%s" % ("armed" if armed else "disarmed", px4_mode_name(beat.custom_mode)))
+        return 0
+    if args.action == "trace":
+        # CSV of the vehicle's own state at the rate PX4 streams it, for tuning and smoothness
+        # checks: t_s,x,y,z,vx,vy,vz (NED m, m/s) and yaw_deg.
+        print("t_s,x,y,z,vx,vy,vz,yaw_deg", flush=True)
+        start = time.monotonic()
+        yaw = float("nan")
+        while time.monotonic() - start < args.altitude_m:
+            msg = link.recv_match(type=["LOCAL_POSITION_NED", "ATTITUDE"], blocking=True,
+                                  timeout=1.0)
+            if msg is None:
+                continue
+            if msg.get_type() == "ATTITUDE":
+                yaw = math.degrees(msg.yaw)
+            else:
+                print("%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f"
+                      % (time.monotonic() - start, msg.x, msg.y, msg.z, msg.vx, msg.vy, msg.vz,
+                         yaw), flush=True)
+        return 0
+    if args.action == "position":
+        pos = link.recv_match(type="LOCAL_POSITION_NED", blocking=True, timeout=ACK_TIMEOUT_S)
+        att = link.recv_match(type="ATTITUDE", blocking=True, timeout=ACK_TIMEOUT_S)
+        if pos is None:
+            print("error: no LOCAL_POSITION_NED", file=sys.stderr)
+            return 1
+        yaw = math.degrees(att.yaw) if att is not None else float("nan")
+        print("pos_ned_m=%.2f,%.2f,%.2f vel_ned_mps=%.2f,%.2f,%.2f yaw_deg=%.1f"
+              % (pos.x, pos.y, pos.z, pos.vx, pos.vy, pos.vz, yaw))
+        return 0
+    if args.action == "arm":
+        return send(cmd.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+    if args.action == "disarm":
+        return send(cmd.MAV_CMD_COMPONENT_ARM_DISARM, 0)
+    if args.action == "land":
+        return send(cmd.MAV_CMD_NAV_LAND)
+    # PX4 takes the takeoff height from MIS_TAKEOFF_ALT (metres above the takeoff point); the
+    # command's own altitude is AMSL, so leave it NaN and set the parameter instead.
+    link.param_set_send("MIS_TAKEOFF_ALT", args.altitude_m)
+    nan = float("nan")
+    return send(cmd.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, nan, nan, nan, nan)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

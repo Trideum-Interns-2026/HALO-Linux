@@ -1,0 +1,12 @@
+# Geolocation filter tuned with tools/tune_position_filter.cpp (`geolocation_tune`).
+#
+# The simulator's GPS has no noise at all, so this was tuned against a realistic receiver instead
+# (1.0 m horizontal / 1.5 m vertical, 5 Hz and 30 Hz) on a drone orbiting at 1.26 m/s and on a
+# hovering one. Retune if the receiver, its rate, or how the vehicle moves changes.
+#
+# A random walk with q = 0.5 m^2/s: orbit error 0.86 m (5 Hz) / 0.47 m (30 Hz) versus 1.08 / 0.53
+# with the old 0.25, and hover error 0.54 m versus 0.45 m. The remaining error while moving is
+# lag, which only a velocity state (constant-velocity filter) would remove.
+/**:
+  ros__parameters:
+    process_noise_variance_m2_per_s: 0.5
