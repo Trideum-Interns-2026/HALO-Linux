@@ -37,7 +37,6 @@ simstack down                # stop what simstack started
 groundstation                # web dashboard at http://127.0.0.1:8000 (API docs at /docs)
 halo_test                    # all tests (no sim, GPU or Triton needed)
 sim_check [--gui|--watch]    # sim only: whole stack, flies it, PASS/FAIL table, tears down
-baylands_demo                # sim only: Baylands, the drone starts 200 m from the person, flies to them, follows once it sees them
 sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # sim only, run by a human
 ```
 

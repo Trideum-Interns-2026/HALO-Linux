@@ -113,9 +113,8 @@ HEADLESS=1 fly            # same, no Gazebo window
 perceive                  # terminal 2: camera bridge + YOLO detector (ros2 launch perception perception.launch.py)
 movement                  # movement service (ros2 launch movement movement.launch.py); needs an armed, airborne vehicle
 sim_check [--gui|--watch]   # one command: whole stack in the sim, arms and flies it, PASS/FAIL table, tears down (SITL only)
-baylands_demo             # sim_check --world baylands --approach 200 --gui: the drone spawns 200 m from the person, flies to them, Movement follows once Perception sees them
 simlinks                  # sim-only: GPS bridge -> /gps/fix + uXRCE-DDS agent (/fmu/...); run next to fly
-sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link|goto --north N --east E [--speed V]|hold   # SITL only; goto legs <= 60 m, <= 8 m/s; human (/arm) or sim-operator; uses PX4 port 14580, runs alongside movement
+sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # SITL only; human (/arm) or sim-operator; uses PX4 port 14580, runs alongside movement
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
 tracking                  # tracking service (ros2 launch tracking tracking.launch.py)
 geolocation               # geolocation service (ros2 launch geolocation geolocation.launch.py)
@@ -261,7 +260,7 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
   target, or lost connection (see `OffboardGuard` in `move.cpp`; `Movement/` leaves offboard via `MovementNode::shutdown`).
   Exception, by Lisa's design: `Movement/` scans for a lost target (`search_timeout_s`, default 0 = until found) instead of stopping at once; set a timeout to hand back to Hold. It always leaves offboard on exit.
 - NEVER arm, take off, or command motion automatically unless that program's documented purpose is
-  to do so (today only `scripts/sitl_vehicle` and `scripts/sim_check`, run by a human or by the sim-operator in the sim, local endpoints only, takeoff <= 10 m; `sitl_vehicle goto` is bounded to 60 m and 8 m/s per command, and `sim_check --approach` flies at most 300 m in 30 m legs, holds on any failure and lands before it ends). Programs assume a human armed the vehicle.
+  to do so (today only `scripts/sitl_vehicle` and `scripts/sim_check`, run by a human or by the sim-operator in the sim, local endpoints only, takeoff <= 10 m). Programs assume a human armed the vehicle.
 - An agent MUST NOT run anything against a real vehicle or flight controller, or change code paths
   meant for one, without explicit instruction from a human in the current task.
 
