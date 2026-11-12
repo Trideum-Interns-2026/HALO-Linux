@@ -2,6 +2,7 @@
 """One-command end-to-end check of the whole HALO stack in the simulator.
 
     sim_check [--gui] [--watch] [--skip-flight]
+    sim_check --world baylands --approach 200 [--gui]     # drone starts 200 m from the person
 
 Brings up PX4 SITL + Gazebo, the sim links (GPS + clock + uXRCE-DDS), Perception, Geolocation,
 Tracking, then (unless --skip-flight) arms, takes off, runs Movement, checks it moved the vehicle
@@ -10,6 +11,12 @@ exits non-zero if anything FAILs. It is the only program besides `sitl_vehicle` 
 (AGENTS.md "Safety and hardware readiness"): SITL only, and it refuses to run if it cannot find the
 simulator. Run it through `sim_check` (the bash wrapper sources ROS).
 
+--approach M   the drone spawns M metres from the person (default bearing: a corridor checked
+          to be clear in Baylands), takes off, and flies towards them in short bounded legs
+          (`sitl_vehicle goto`, at most 60 m and 8 m/s each, same height). As soon as Perception
+          sees the person it holds, checks Tracking's range against the known distance, then starts
+          Movement, which follows. Needs Triton (Spark), and --world baylands unless you pass
+          --approach-bearing yourself; refuses --orbit, --views and --skip-flight.
 --gui     open the Gazebo window on DISPLAY=:0 (the Selkies desktop), via vglrun.
 --orbit   Movement circles the person (30 s per lap) instead of following; checks that the nose
           turns with the circle.
@@ -77,9 +84,31 @@ LIMIT_ORBIT_STRAFE = 1.5   # Movement's orbit-only speed cap (max_orbit_speed_m_
 LIMIT_YAW_DEG_S = 45.0
 LIMIT_SLACK = 1.001
 LEFTOVER_PATTERN = r"px4|gz sim|MicroXRCE|parameter_bridge|ros2 launch|yolo_person|tracking_node|" \
-                   r"geolocation_node|movement_node|rqt_image_view|debug_view|" \
+                   r"geolocation_node|movement_node|ui_bridge|rqt_image_view|debug_view|" \
                    r"sitl_vehicle (link|trace)"
 
+# --approach. The world frame is Gazebo's: x east, y north, angles counter-clockwise from +x. The
+# person stands at the origin (where the default spawn is known to be good ground); the drone spawns
+# MAX of this far away. 200 deg (about south-west, the drone at x -188 m, y -68 m) was chosen from
+# the Baylands mesh: no tree or building within 10 m of the 200 m line, and the spawn spot is clear.
+APPROACH_WORLD = "baylands"
+APPROACH_BEARING_DEG = 200.0
+MAX_APPROACH_M = 300.0
+APPROACH_LEG_M = 30.0            # one goto leg; sitl_vehicle refuses more than 60
+APPROACH_SPEED_MPS = 5.0         # sitl_vehicle refuses more than 8
+APPROACH_ARRIVE_M = 3.0          # a leg is done when the vehicle is this close to its end
+APPROACH_STALL_S = 60.0          # wall-clock seconds without 0.5 m of progress: give up and hold
+APPROACH_TOTAL_S = 1500.0        # wall-clock limit for the whole approach
+APPROACH_GIVE_UP_M = 8.0         # closer than this and still not seen: fail (follow distance is 6)
+APPROACH_SEEN_CONFIDENCE = 0.5
+APPROACH_POLL_S = 0.5
+APPROACH_FOLLOW_S = 70.0         # sim seconds of Movement: the walk from detection range to 6 m
+FOLLOW_DISTANCE_M = 6.0          # Movement's default safe_distance_m
+FOLLOW_DISTANCE_TOL_M = 2.5
+RANGE_TOL_FRACTION = 0.25        # Tracking's range may be off by this fraction of the true one...
+RANGE_TOL_MIN_M = 3.0            # ...but never be held to better than this
+WEB_API_URL = os.environ.get("HALO_WEB_API_URL", "http://127.0.0.1:8000")
+WEB_API_FRESH_S = 30.0
 SPEED = 1.0           # --speed: Gazebo real-time factor requested through PX4_SIM_SPEED_FACTOR
 results = []          # (name, status, detail)
 procs = {}            # name -> Popen, each in its own session / process group
@@ -238,6 +267,57 @@ def local_distance_m(lat1, lon1, lat2, lon2):
     return math.hypot(dn, de)
 
 
+def approach_geometry(distance_m, bearing_deg):
+    """Where everything starts for --approach, in Gazebo's world frame (x east, y north).
+
+    The person is at the origin facing the drone; the drone is distance_m away at bearing_deg
+    (counter-clockwise from +x) facing the person. `person_ned` is the person's position in the
+    drone's local NED frame (origin = where the drone spawned), which is what `sitl_vehicle
+    position` reports. yaw_rad faces the person for the drone and the drone for the person (the
+    person model, yaw 0, looks along -x).
+    """
+    b = math.radians(bearing_deg)
+    x, y = distance_m * math.cos(b), distance_m * math.sin(b)
+    yaw = math.atan2(math.sin(b - math.pi), math.cos(b - math.pi))
+    return {"drone_xy": (x, y), "yaw_rad": yaw, "person_ned": (-y, -x),
+            "model_pose": "%.3f,%.3f,0,0,0,%.5f" % (x, y, yaw)}
+
+
+def leg_offset(pos_ne, person_ne, max_leg_m):
+    """(north, east, remaining_m): the next leg towards the person, at most max_leg_m long."""
+    dn, de = person_ne[0] - pos_ne[0], person_ne[1] - pos_ne[1]
+    remaining = math.hypot(dn, de)
+    if remaining <= max_leg_m or remaining == 0.0:
+        return dn, de, remaining
+    k = max_leg_m / remaining
+    return dn * k, de * k, remaining
+
+
+def range_ok(measured_m, true_m):
+    """Tracking's range to the person against the known one."""
+    return abs(measured_m - true_m) <= max(RANGE_TOL_MIN_M, RANGE_TOL_FRACTION * true_m)
+
+
+def follow_distance_ok(distance_m):
+    return abs(distance_m - FOLLOW_DISTANCE_M) <= FOLLOW_DISTANCE_TOL_M
+
+
+def check_approach_args(args):
+    """Return an error message for an unusable --approach combination, or None."""
+    if not args.approach:
+        return None
+    if not 0.0 < args.approach <= MAX_APPROACH_M:
+        return "--approach must be in (0, %.0f] m" % MAX_APPROACH_M
+    if args.world != APPROACH_WORLD and args.approach_bearing is None:
+        return ("the default approach direction was only checked in %s; pass --approach-bearing "
+                "for another world (and check the line is clear)" % APPROACH_WORLD)
+    for flag, on in (("--orbit", args.orbit), ("--views", args.views),
+                     ("--skip-flight", args.skip_flight)):
+        if on:
+            return "--approach cannot be combined with %s" % flag
+    return None
+
+
 def logged_limits_ok(log_path, strafe_limit=LIMIT_STRAFE):
     """Every command Movement logged must respect its limits. Returns (ok, n_commands, worst)."""
     worst = {"forward": 0.0, "strafe": 0.0, "yaw": 0.0}
@@ -352,7 +432,7 @@ def gz_camera_rate():
     return (out.splitlines() or ["no output"])[-1][:80]
 
 
-def check_services(probe, have_triton):
+def check_services(probe, have_triton, person_near=True):
     from geolocation_msgs.msg import GeolocationState
     from perception_msgs.msg import Detection
     from px4_msgs.msg import VehicleAttitude
@@ -385,19 +465,24 @@ def check_services(probe, have_triton):
         record("perception", "SKIP", "HALO_TRITON_URL not set (Triton is Spark-only)")
         record("tracking", "SKIP", "needs perception")
         return
-    det = probe.one(Detection, "/perception/detection", accept=lambda d: d.confidence > 0.5)
-    record("perception", "PASS" if det else "FAIL",
-           "confidence %.2f box x %.0f-%.0f" % (det.confidence, det.x_min, det.x_max)
-           if det else "no detection of the spawned person")
-    trk = probe.one(TrackingState, "/tracking/position", 30.0)
-    if trk and geo and all(math.isfinite(v) for v in (trk.latitude_deg, trk.longitude_deg)):
-        dist = local_distance_m(geo.latitude_deg, geo.longitude_deg,
-                                trk.latitude_deg, trk.longitude_deg)
-        record("tracking", "PASS" if 0.5 < dist < 30.0 else "FAIL",
-               "person %.1f m from the drone, error xyz %.2f %.2f %.2f m"
-               % (dist, trk.error_x_m, trk.error_y_m, trk.error_z_m))
+    if not person_near:
+        record("perception", "SKIP", "person is far away: checked during the approach")
+        record("tracking", "SKIP", "person is far away: checked during the approach")
     else:
-        record("tracking", "FAIL", "no /tracking/position (see %s/tracking.log)" % LOG_DIR)
+        det = probe.one(Detection, "/perception/detection", accept=lambda d: d.confidence > 0.5)
+        record("perception", "PASS" if det else "FAIL",
+               "confidence %.2f box x %.0f-%.0f" % (det.confidence, det.x_min, det.x_max)
+               if det else "no detection of the spawned person")
+        trk = probe.one(TrackingState, "/tracking/position", 30.0)
+        if trk and geo and all(math.isfinite(v) for v in (trk.latitude_deg, trk.longitude_deg)):
+            dist = local_distance_m(geo.latitude_deg, geo.longitude_deg,
+                                    trk.latitude_deg, trk.longitude_deg)
+            record("tracking", "PASS" if 0.5 < dist < 30.0 else "FAIL",
+                   "person %.1f m from the drone, error xyz %.2f %.2f %.2f m"
+                   % (dist, trk.error_x_m, trk.error_y_m, trk.error_z_m))
+        else:
+            record("tracking", "FAIL", "no /tracking/position (see %s/tracking.log)" % LOG_DIR)
+
 
     # Reliable like the bridge publishes it: a best-effort reader of these 6 MB frames loses most
     # of them (about 4 Hz of 15), which would be a measurement artefact, not a camera fault.
@@ -414,6 +499,49 @@ def check_services(probe, have_triton):
     record("sim_speed", "SKIP" if rtf is None else "PASS" if rtf >= 0.9 * SPEED else "WARN",
            "real-time factor %s (asked for %.1f)" % ("unknown" if rtf is None else "%.2f" % rtf,
                                                      SPEED))
+
+
+def check_ui(expect_target):
+    """The ui bridge's last post, as the web API serves it. Skipped when no web API is running
+    (start it with `groundstation`; it is not part of the sim)."""
+    import json
+    import urllib.request
+    from datetime import datetime, timezone
+
+    def fetch(path):
+        with urllib.request.urlopen(WEB_API_URL + path, timeout=3.0) as resp:
+            return json.loads(resp.read())
+
+    try:
+        fetch("/api/health")
+    except (OSError, ValueError):
+        record("ui", "SKIP", "no web API on %s (run `groundstation`)" % WEB_API_URL)
+        return
+    latest = {}
+
+    def fresh():
+        nonlocal latest
+        try:
+            latest = fetch("/api/telemetry/latest") or {}
+        except (OSError, ValueError):
+            return False
+        try:
+            age = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(latest["received_at"].replace("Z", "+00:00"))
+                   ).total_seconds()
+        except (KeyError, ValueError):
+            return False
+        return age <= WEB_API_FRESH_S and latest.get("latitude") is not None and (
+            not expect_target or latest.get("target_latitude") is not None)
+
+    ok = wait_for(fresh, 30.0, 2.0)
+    record("ui", "PASS" if ok else "FAIL",
+           "bridge posted drone %.5f %.5f%s" % (
+               latest.get("latitude", float("nan")), latest.get("longitude", float("nan")),
+               " and person %.5f %.5f" % (latest["target_latitude"], latest["target_longitude"])
+               if ok and latest.get("target_latitude") is not None else "")
+           if ok else "no fresh %stelemetry from the ui bridge on %s"
+           % ("drone+person " if expect_target else "", WEB_API_URL))
 
 
 class Flight:
@@ -466,7 +594,90 @@ def takeoff(args, fl):
     return bool(reached)
 
 
-def movement_phase(args, fl):
+def approach_phase(fl, probe, geom):
+    """Fly towards the person in short legs until Perception sees them. Returns True once seen
+    (the vehicle is then holding), False if it gave up (it holds in every case)."""
+    from geolocation_msgs.msg import GeolocationState
+    from perception_msgs.msg import Detection
+    from tracking_msgs.msg import TrackingState
+
+    person = geom["person_ned"]
+    start = parse_position(vehicle("position")[1])
+    if not start:
+        record("approach", "FAIL", "no position from the vehicle")
+        return False
+    t0 = time.monotonic()
+    seen = None
+    cur = start
+    failure = None
+    while seen is None and failure is None:
+        dn, de, remaining = leg_offset(cur["pos"][:2], person, APPROACH_LEG_M)
+        if remaining <= APPROACH_GIVE_UP_M:
+            failure = "not seen within %.0f m of the person" % APPROACH_GIVE_UP_M
+            break
+        rc, out = vehicle("goto", "--north", "%.2f" % dn, "--east", "%.2f" % de,
+                          "--speed", "%g" % APPROACH_SPEED_MPS)
+        if rc != 0:
+            failure = "goto refused: %s" % out[-120:]
+            break
+        end = (cur["pos"][0] + dn, cur["pos"][1] + de)
+        best, progress_at = math.hypot(dn, de), time.monotonic()
+        while True:
+            seen = probe.one(Detection, "/perception/detection", APPROACH_POLL_S,
+                             accept=lambda d: d.confidence >= APPROACH_SEEN_CONFIDENCE)
+            if seen:
+                break
+            pos = parse_position(vehicle("position")[1])
+            if not pos:
+                continue
+            cur = pos
+            left = math.dist(pos["pos"][:2], end)
+            if left <= APPROACH_ARRIVE_M:
+                break
+            now = time.monotonic()
+            if left < best - 0.5:
+                best, progress_at = left, now
+            elif now - progress_at > APPROACH_STALL_S:
+                failure = "no progress for %.0f s" % APPROACH_STALL_S
+                break
+            if now - t0 > APPROACH_TOTAL_S:
+                failure = "approach took more than %.0f s" % APPROACH_TOTAL_S
+                break
+        if failure:
+            break
+    vehicle("hold")                       # stop where it is, whatever happened
+    cur = parse_position(vehicle("position")[1]) or cur
+    flown = math.dist(start["pos"][:2], cur["pos"][:2])
+    left_m = math.dist(cur["pos"][:2], person)
+    if seen is None:
+        record("approach", "FAIL", "%s after %.0f m flown (%.0f m from the person)"
+               % (failure, flown, left_m))
+        return False
+    record("approach", "PASS",
+           "person seen at %.0f m from them after %.0f m flown in %.0f s, confidence %.2f, "
+           "box x %.0f-%.0f" % (left_m, flown, time.monotonic() - t0, seen.confidence,
+                                seen.x_min, seen.x_max))
+    held = wait_for(lambda: (vehicle_state() or (None, ""))[1] == "Hold", STOP_HOLD_TIMEOUT_S, 1.0)
+    record("approach_hold", "PASS" if held else "FAIL",
+           "holding for Movement" if held else "mode after hold: %s" % (vehicle_state(),))
+
+    # Tracking's range to the person against where the person really is.
+    geo = probe.one(GeolocationState, "/geolocation/position", 10.0)
+    trk = probe.one(TrackingState, "/tracking/position", 20.0)
+    if geo and trk:
+        measured = local_distance_m(geo.latitude_deg, geo.longitude_deg,
+                                    trk.latitude_deg, trk.longitude_deg)
+        true_m = math.dist((parse_position(vehicle("position")[1]) or cur)["pos"][:2], person)
+        record("tracking", "PASS" if range_ok(measured, true_m) else "FAIL",
+               "person %.1f m away by Tracking, %.1f m by the known positions, error xyz "
+               "%.2f %.2f %.2f m" % (measured, true_m, trk.error_x_m, trk.error_y_m,
+                                     trk.error_z_m))
+    else:
+        record("tracking", "FAIL", "no /tracking/position once the person was seen")
+    return True
+
+
+def movement_phase(args, fl, person_ned=None):
     """Run Movement (follow or orbit) for a while and check what it did to the vehicle."""
     mode = ("orbit" if args.orbit else "follow") + (", tuned gains" if args.tuned else "")
     # debug: the per-command log line is DEBUG, and the checks below count those lines
@@ -477,11 +688,12 @@ def movement_phase(args, fl):
         cmd += ["orbit:=true", "orbit_period_s:=%g" % ORBIT_PERIOD_S]
     start("movement", cmd)
     trace_path = os.path.join(LOG_DIR, "trace.log")   # start() names logs <name>.log
-    trace_s = (WATCH_FOLLOW_S if args.watch else (ORBIT_S if args.orbit else FOLLOW_S)) / SPEED
+    follow_s = APPROACH_FOLLOW_S if person_ned else WATCH_FOLLOW_S if args.watch else (
+        ORBIT_S if args.orbit else FOLLOW_S)
+    trace_s = follow_s / SPEED
     start("trace", [VEHICLE, "trace", "%g" % (trace_s + 4.0)])
     movement_log = os.path.join(LOG_DIR, "movement.log")
-    duration = WATCH_FOLLOW_S if args.watch else (ORBIT_S if args.orbit else FOLLOW_S)
-    duration /= SPEED       # the lap and the follow are sim-time motions
+    duration = follow_s / SPEED       # the lap and the follow are sim-time motions
     interval = (2.5 if args.orbit else 5.0) / SPEED
     time.sleep(2.0)
     start_pose = parse_position(vehicle("position")[1]) or fl.start_pose
@@ -497,6 +709,10 @@ def movement_phase(args, fl):
         last = end_pose = cur
         if args.watch:
             print("   pos %s yaw %.0f" % (["%.1f" % v for v in cur["pos"]], cur["yaw"]), flush=True)
+    if person_ned:
+        d = math.dist(end_pose["pos"][:2], person_ned)
+        record("follow_distance", "PASS" if follow_distance_ok(d) else "FAIL",
+               "%.1f m from the person after following (target %.0f m)" % (d, FOLLOW_DISTANCE_M))
     with open(movement_log, errors="replace") as fh:
         text = fh.read()
     started = "Offboard mode active" in text
@@ -558,7 +774,7 @@ def land(args, fl):
 
 def teardown():
     log("teardown")
-    for name in ("movement", "trace", "link", "tracking", "geolocation", "perception",
+    for name in ("movement", "trace", "link", "ui", "tracking", "geolocation", "perception",
                  "perception_gui", "sim_links", "fly"):
         stop(name)
     run(["ros2", "daemon", "stop"], timeout=15.0)
@@ -576,6 +792,14 @@ def main(argv=None):
     ap.add_argument("--world", default=os.environ.get("PX4_GZ_WORLD", DEFAULT_WORLD),
                     help="Gazebo world to load, as PX4_GZ_WORLD (default: %(default)s), for "
                          "example baylands; a non-default world gets a longer start-up wait")
+    ap.add_argument("--approach", type=float, default=0.0, metavar="M",
+                    help="spawn the drone M metres from the person, fly to them in short legs, "
+                         "and start Movement's follow once Perception sees them (see the top of "
+                         "this file); for example --world baylands --approach 200")
+    ap.add_argument("--approach-bearing", type=float, default=None, metavar="DEG",
+                    help="where the drone starts as seen from the person, degrees counter-"
+                         "clockwise from east in the world frame (default %.0f, checked clear in "
+                         "%s only)" % (APPROACH_BEARING_DEG, APPROACH_WORLD))
     ap.add_argument("--orbit", action="store_true",
                     help="Movement orbits the person (%.0f s per lap) instead of following"
                     % ORBIT_PERIOD_S)
@@ -594,12 +818,23 @@ def main(argv=None):
                     help="diagnostic: do not run the background GCS heartbeat (PX4 may fail over)")
     args = ap.parse_args(argv)
     args.gui = args.gui or args.watch
+    problem = check_approach_args(args)
+    if problem:
+        print("error: " + problem, file=sys.stderr)
+        return 2
+    geom = approach_geometry(args.approach, APPROACH_BEARING_DEG if args.approach_bearing is None
+                             else args.approach_bearing) if args.approach else None
     global SPEED, WORLD_SERVICE
     SPEED = min(max(args.speed, 0.1), MAX_SPEED)
     WORLD_SERVICE = "/world/%s/create" % args.world
     sim_timeout_s = SIM_TIMEOUT_S if args.world == DEFAULT_WORLD else BIG_WORLD_TIMEOUT_S
     world_env = {"PX4_GZ_WORLD": args.world, "HALO_SIM_WAIT_S": str(int(sim_timeout_s))}
+    if geom:
+        world_env["PX4_GZ_MODEL_POSE"] = geom["model_pose"]   # where px4-gazebo spawns the drone
     have_triton = bool(os.environ.get("HALO_TRITON_URL"))
+    if geom and not have_triton:
+        print("error: --approach needs Perception (HALO_TRITON_URL, Spark only)", file=sys.stderr)
+        return 2
 
     if world_up():
         print("error: a simulator is already running; stop it first (refusing to share it)",
@@ -637,6 +872,7 @@ def main(argv=None):
               + (["params_file:=" + GEOLOCATION_TUNED] if args.tuned else []))
         start("tracking", ["ros2", "launch", "tracking", "tracking.launch.py",
                            "use_sim_time:=true"])
+        start("ui", ["ros2", "launch", "ui", "ui.launch.py"])   # posts to the web API if it runs
         if have_triton:
             start("perception", ["ros2", "launch", "perception", "perception.launch.py"]
                   + (["min_confidence:=%g" % VIEW_MIN_CONFIDENCE] if args.views else [])
@@ -655,8 +891,10 @@ def main(argv=None):
                 gui_cmd = ["ros2", "run", "rqt_image_view", "rqt_image_view",
                            "/camera/front/image_raw"]
             start("perception_gui", gui_cmd, dict(speed_env(), DISPLAY=":0"))
-        # 6 m ahead = the follow distance
-        spawn_rc, spawn_out = run([SPAWN_PERSON, "6", "0", "0"], timeout=30.0)
+        # 6 m ahead = the follow distance; with --approach, at the world origin facing the drone
+        spawn_cmd = ([SPAWN_PERSON, "0", "0", "%.5f" % geom["yaw_rad"]] if geom
+                     else [SPAWN_PERSON, "6", "0", "0"])
+        spawn_rc, spawn_out = run(spawn_cmd, timeout=30.0)
         log("spawn_person rc=%s: %s" % (spawn_rc, " ".join(spawn_out.split())[-160:]))
 
         flying = not args.skip_flight and not args.views and have_triton
@@ -671,15 +909,26 @@ def main(argv=None):
 
         log("checking services")
         probe = Probe()
-        check_services(probe, have_triton)
+        check_services(probe, have_triton, person_near=not geom)
         if args.views and have_triton:
             check_views(probe)
+        seen = True
+        if airborne and geom:
+            log("approach: %.0f m to the person, legs of %.0f m at %.0f m/s"
+                % (args.approach, APPROACH_LEG_M, APPROACH_SPEED_MPS))
+            seen = approach_phase(flight, probe, geom)
+            if seen:
+                check_ui(expect_target=True)
         probe.close()
         probe = None
+        if not geom:
+            check_ui(expect_target=have_triton)
 
-        if airborne:
+        if airborne and seen:
             log("movement (%s)" % ("orbit" if args.orbit else "follow"))
-            movement_phase(args, flight)
+            movement_phase(args, flight, geom["person_ned"] if geom else None)
+        elif airborne:
+            record("movement_offboard", "SKIP", "the person was never seen")
     except KeyboardInterrupt:
         record("run", "FAIL", "interrupted")
     finally:

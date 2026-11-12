@@ -6,10 +6,16 @@ job is to arm and take off, and only against the simulator, on a command from a 
 Never run it against a real vehicle.
 
     sitl_vehicle arm | takeoff [alt_m] | land | disarm | status | position | link | trace [s]
+    sitl_vehicle goto --north N --east E [--speed V] | hold
 
 status    armed/disarmed and the PX4 flight mode (Hold, Offboard, Return, ...).
 position  local NED position (m), velocity (m/s) and yaw (deg), to show the vehicle moved.
 trace     CSV of position, velocity and yaw for [s] seconds at PX4's stream rate.
+goto      fly the airborne vehicle N m north and E m east of where it is now, at the same height,
+          with MAV_CMD_DO_REPOSITION (PX4's "go to location": it then holds there). One command is
+          at most MAX_GOTO_M long and V at most MAX_GOTO_SPEED_MPS, so a longer trip is a series
+          of short legs. Sends the command and returns; poll `position` for arrival.
+hold      stop where it is: DO_REPOSITION to the current position.
 link      keeps sending ground-station heartbeats until Ctrl+C/SIGTERM. Run it in the background
           for the whole flight; without a GCS heartbeat PX4 fails over to Return/RTL.
 
@@ -29,6 +35,10 @@ import time
 DEFAULT_ENDPOINT = "tcp:127.0.0.1:5760"
 DEFAULT_TAKEOFF_ALT_M = 5.0
 MAX_TAKEOFF_ALT_M = 10.0
+MAX_GOTO_M = 60.0               # longest single `goto` leg (horizontal)
+DEFAULT_GOTO_SPEED_MPS = 5.0
+MAX_GOTO_SPEED_MPS = 8.0
+EARTH_RADIUS_M = 6378137.0      # WGS84 equatorial radius; flat-earth offsets are fine at <= 60 m
 HEARTBEAT_TIMEOUT_S = 10.0
 ACK_TIMEOUT_S = 5.0
 GCS_SYSTEM_ID = 255
@@ -75,11 +85,35 @@ def check_altitude(alt_m):
     return alt_m
 
 
+def check_goto(north_m, east_m, speed_mps):
+    """Return (north_m, east_m, speed_mps) if the leg is within the limits, else ValueError."""
+    if not all(math.isfinite(v) for v in (north_m, east_m, speed_mps)):
+        raise ValueError("goto needs finite --north, --east and --speed")
+    if math.hypot(north_m, east_m) > MAX_GOTO_M:
+        raise ValueError("goto leg must be at most %.0f m (got %.1f m)"
+                         % (MAX_GOTO_M, math.hypot(north_m, east_m)))
+    if not 0.0 < speed_mps <= MAX_GOTO_SPEED_MPS:
+        raise ValueError("goto speed must be in (0, %.0f] m/s" % MAX_GOTO_SPEED_MPS)
+    return north_m, east_m, speed_mps
+
+
+def offset_latlon(lat_deg, lon_deg, north_m, east_m):
+    """Latitude and longitude (deg) of the point north_m / east_m away (flat-earth)."""
+    dlat = math.degrees(north_m / EARTH_RADIUS_M)
+    dlon = math.degrees(east_m / (EARTH_RADIUS_M * math.cos(math.radians(lat_deg))))
+    return lat_deg + dlat, lon_deg + dlon
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("action", choices=["arm", "takeoff", "land", "disarm", "status", "position", "link", "trace"])
+    ap.add_argument("action", choices=["arm", "takeoff", "land", "disarm", "status", "position",
+                                       "link", "trace", "goto", "hold"])
     ap.add_argument("altitude_m", nargs="?", type=float, default=DEFAULT_TAKEOFF_ALT_M,
                     help="takeoff altitude in metres; for `trace`, the duration in seconds")
+    ap.add_argument("--north", type=float, default=0.0, help="goto: metres north of here")
+    ap.add_argument("--east", type=float, default=0.0, help="goto: metres east of here")
+    ap.add_argument("--speed", type=float, default=DEFAULT_GOTO_SPEED_MPS,
+                    help="goto: ground speed in m/s, at most %.0f" % MAX_GOTO_SPEED_MPS)
     ap.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     args = ap.parse_args(argv)
 
@@ -87,6 +121,8 @@ def main(argv=None):
         check_endpoint(args.endpoint)
         if args.action == "takeoff":
             check_altitude(args.altitude_m)
+        if args.action == "goto":
+            check_goto(args.north, args.east, args.speed)
     except ValueError as err:
         print("error: %s" % err, file=sys.stderr)
         return 2
@@ -170,6 +206,27 @@ def main(argv=None):
         print("pos_ned_m=%.2f,%.2f,%.2f vel_ned_mps=%.2f,%.2f,%.2f yaw_deg=%.1f"
               % (pos.x, pos.y, pos.z, pos.vx, pos.vy, pos.vz, yaw))
         return 0
+    if args.action in ("goto", "hold"):
+        here = link.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=ACK_TIMEOUT_S)
+        if here is None:
+            print("error: no GLOBAL_POSITION_INT", file=sys.stderr)
+            return 1
+        lat, lon = here.lat / 1e7, here.lon / 1e7
+        speed = args.speed
+        if args.action == "goto":
+            lat, lon = offset_latlon(lat, lon, args.north, args.east)
+        else:
+            speed = -1.0     # "default speed"; the target is where the vehicle already is
+        # COMMAND_INT keeps latitude/longitude as 1e7-scaled integers; a float32 COMMAND_LONG
+        # parameter would round them to about half a metre. Altitude stays the current AMSL one.
+        link.mav.command_int_send(
+            link.target_system, link.target_component, cmd.MAV_FRAME_GLOBAL,
+            cmd.MAV_CMD_DO_REPOSITION, 0, 0, speed, cmd.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE, 0,
+            float("nan"), int(round(lat * 1e7)), int(round(lon * 1e7)), here.alt / 1000.0)
+        ack = link.recv_match(type="COMMAND_ACK", blocking=True, timeout=ACK_TIMEOUT_S)
+        ok = ack is not None and ack.command == cmd.MAV_CMD_DO_REPOSITION and ack.result == 0
+        print("MAV_CMD_DO_REPOSITION: %s" % ("accepted" if ok else "REJECTED"))
+        return 0 if ok else 1
     if args.action == "arm":
         return send(cmd.MAV_CMD_COMPONENT_ARM_DISARM, 1)
     if args.action == "disarm":
