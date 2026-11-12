@@ -60,3 +60,26 @@ def test_model_assets_when_cloned(name, model):
     for uri in uris:                                        # model://<model>/meshes/...
         assert uri.startswith("model://%s/" % model)
         assert os.path.isfile(os.path.join(base, uri[len("model://%s/" % model):])), uri
+
+
+def _floats(text):
+    return [float(v) for v in text.split()]
+
+
+def test_basic_city_keeps_its_dark_look():
+    # the roads are black by design (Color.png is pure black), so the ground and sky must be dark
+    # too: on PX4's light gray the city washes out into a flat plane with black walls
+    world = ET.parse(os.path.join(REPO, "Worlds", "city", "city_basic.sdf")).getroot().find("world")
+    ground = [m for m in world.findall("model") if m.get("name") == "ground_plane"][0]
+    assert max(_floats(ground.find(".//visual//diffuse").text)[:3]) < 0.1
+    assert max(_floats(world.find("scene/background").text)) < 0.1
+
+
+def test_cat_mouse_city_keeps_its_green_ground_and_blue_sky():
+    world = ET.parse(
+        os.path.join(REPO, "Worlds", "city", "city_cat_mouse.sdf")).getroot().find("world")
+    ground = [m for m in world.findall("model") if m.get("name") == "ground_plane"][0]
+    r, g, b = _floats(ground.find(".//visual//diffuse").text)[:3]
+    assert g > r and g > b
+    r, g, b, _a = _floats(world.find("scene/background").text)
+    assert b > r

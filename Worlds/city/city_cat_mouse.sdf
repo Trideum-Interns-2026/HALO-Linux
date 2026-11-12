@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Drone cat-and-mouse city (Blender export)
-     A PX4 world: PX4's own default world (physics, gravity, ground plane, light, GPS origin)
-     plus the my_city_v3 model from JdeRobot's RoboticsInfrastructure (humble-devel). The model's
-     meshes are found through GZ_SIM_RESOURCE_PATH, see Worlds/city/README.md. The world name must
-     equal this file's name: PX4 loads $PX4_GZ_WORLDS/$PX4_GZ_WORLD.sdf and talks to
-     /world/<name>/... -->
+<!-- Cat-and-mouse city: low-poly park with trees, a river and a few buildings, green ground, blue sky
+     Built from two sources: PX4's default world supplies the physics, gravity, magnetic field and
+     GPS origin (so SITL works), and JdeRobot's RoboticsInfrastructure (humble-devel, scene
+     drone_cat_mouse_city.world) supplies the look (sky, lights, ground plane) and the my_city_v3 model. Use the scene's
+     own ground and sky: the city only reads as a city against them (the black roads ARE the
+     black ground). Meshes are found through GZ_SIM_RESOURCE_PATH, see Worlds/city/README.md.
+     The world name must equal this file's name: PX4 loads $PX4_GZ_WORLDS/$PX4_GZ_WORLD.sdf and
+     talks to /world/<name>/... -->
 <sdf version="1.9">
   <world name="city_cat_mouse">
     <physics type="ode">
@@ -14,30 +16,30 @@
     </physics>
     <gravity>0 0 -9.8</gravity>
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
-    <atmosphere type="adiabatic"/>
+    <atmosphere type="adiabatic" />
     <scene>
-      <grid>false</grid>
-      <ambient>0.4 0.4 0.4 1</ambient>
-      <background>0.7 0.7 0.7 1</background>
+      <ambient>0.6 0.6 0.7 1</ambient>
+      <background>0.5 0.7 0.9 1</background>
       <shadows>true</shadows>
     </scene>
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 100 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.5 0.3 -1.0</direction>
+    </light>
     <model name="ground_plane">
       <static>true</static>
+      <pose>0 0 -0.05 0 0 0</pose>
       <link name="link">
         <collision name="collision">
           <geometry>
             <plane>
               <normal>0 0 1</normal>
-              <size>1 1</size>
+              <size>500 500</size>
             </plane>
           </geometry>
-          <surface>
-            <friction>
-              <ode/>
-            </friction>
-            <bounce/>
-            <contact/>
-          </surface>
         </collision>
         <visual name="visual">
           <geometry>
@@ -47,48 +49,12 @@
             </plane>
           </geometry>
           <material>
-            <ambient>0.8 0.8 0.8 1</ambient>
-            <diffuse>0.8 0.8 0.8 1</diffuse>
-            <specular>0.8 0.8 0.8 1</specular>
+            <ambient>0.12 0.42 0.08 1</ambient>
+            <diffuse>0.12 0.42 0.08 1</diffuse>
           </material>
         </visual>
-        <pose>0 0 0 0 -0 0</pose>
-        <inertial>
-          <pose>0 0 0 0 -0 0</pose>
-          <mass>1</mass>
-          <inertia>
-            <ixx>1</ixx>
-            <ixy>0</ixy>
-            <ixz>0</ixz>
-            <iyy>1</iyy>
-            <iyz>0</iyz>
-            <izz>1</izz>
-          </inertia>
-        </inertial>
-        <enable_wind>false</enable_wind>
       </link>
-      <pose>0 0 0 0 -0 0</pose>
-      <self_collide>false</self_collide>
     </model>
-    <light name="sunUTC" type="directional">
-      <pose>0 0 500 0 -0 0</pose>
-      <cast_shadows>true</cast_shadows>
-      <intensity>1</intensity>
-      <direction>0.001 0.625 -0.78</direction>
-      <diffuse>0.904 0.904 0.904 1</diffuse>
-      <specular>0.271 0.271 0.271 1</specular>
-      <attenuation>
-        <range>2000</range>
-        <linear>0</linear>
-        <constant>1</constant>
-        <quadratic>0</quadratic>
-      </attenuation>
-      <spot>
-        <inner_angle>0</inner_angle>
-        <outer_angle>0</outer_angle>
-        <falloff>0</falloff>
-      </spot>
-    </light>
     <spherical_coordinates>
       <surface_model>EARTH_WGS84</surface_model>
       <world_frame_orientation>ENU</world_frame_orientation>
@@ -96,7 +62,6 @@
       <longitude_deg> 8.546163739800146</longitude_deg>
       <elevation>0</elevation>
     </spherical_coordinates>
-      <!-- the city; its ground is the plane above, the buildings are on top of it -->
     <include>
       <uri>model://my_city_v3</uri>
       <pose>0 0 0 0 0 0</pose>
