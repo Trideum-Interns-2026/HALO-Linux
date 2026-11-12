@@ -16,11 +16,14 @@ The mission, as a pilot would fly it:
      Perception, Geolocation, Tracking and the ui bridge. Open the Gazebo window and the
      Perception view unless --headless.
   2. Pre-flight: wait for the position estimate, then arm (PX4 refuses until it is ready).
-  3. Climb to CRUISE_ALT_M (20 ft) and fly towards the person in short legs, watching the camera
-     (Perception) the whole way. The pilot does not climb over trees: the route avoids them.
-  4. The moment the person is seen: hold, check that Tracking agrees about where they are,
-     descend to FOLLOW_ALT_M so the camera sees them whole.
-  5. Switch on Movement (the automatic follow) and let it close to the follow distance.
+  3. Climb to 20 ft and fly towards the person in short legs, watching the camera (Perception).
+     The pilot stays at 20 ft all the way and never climbs over trees: the route avoids them.
+  4. Keep going after the first sighting until the person is ENGAGE_DISTANCE_M away, then hold
+     and check that Perception still sees them and that Tracking agrees about where they are.
+  5. Switch on Movement (the automatic follow), asked to follow at FOLLOW_DISTANCE_M. At 20 ft
+     the camera only keeps the person's feet in frame beyond about 16 m, so the follow distance
+     is set from the height (a parameter file, no Movement code is touched). If Tracking loses
+     the person for LOST_ABORT_S the pilot takes over instead of letting Movement circle.
   6. Stop Movement (PX4 goes back to Hold), land, disarm, shut everything down.
 
 Safety, all enforced in code: every command is bounded (MAX_ALT_M, MAX_LEG_M, MAX_SPEED_MPS, total
@@ -59,13 +62,12 @@ MIN_MISSION_M = 40.0
 
 # ---- limits, every one enforced ---------------------------------------------------------------
 CRUISE_ALT_M = 6.096             # 20 ft: below the treetops, so the route goes around trees
-FOLLOW_ALT_M = 1.5               # the height Movement follows at; the camera sees the person whole
 MAX_ALT_M = 10.0
 MIN_ALT_M = 1.2
 MAX_LEG_M = 30.0                 # one fly-to-point leg (sim helper limit is 60)
 MAX_SPEED_MPS = 5.0              # (sim helper limit is 8)
 ARRIVE_M = 3.0                   # a leg is done this close to its end
-GIVE_UP_M = 8.0                  # closer than this and the person is still unseen: abort
+ENGAGE_DISTANCE_M = 25.0         # get this close before switching on Movement
 STALL_S = 60.0                   # wall seconds without 0.5 m of progress on a leg: abort
 APPROACH_TOTAL_S = 1500.0        # wall-clock limit for the approach
 MAX_FLOWN_M = 400.0              # total horizontal distance the approach may fly
@@ -74,7 +76,6 @@ MAX_FLOWN_M = 400.0              # total horizontal distance the approach may fl
 WORLD_WAIT_S = 300.0             # baylands loads big meshes
 ARM_WAIT_S = 90.0
 CLIMB_WAIT_S = 180.0
-DESCENT_WAIT_S = 180.0
 STOP_WAIT_S = 30.0
 FOLLOW_TIMEOUT_S = 900.0
 LAND_WAIT_S = 240.0
@@ -86,8 +87,17 @@ SEEN_WINDOW_S = 2.0
 TRACKING_WAIT_S = 30.0
 RANGE_TOL_FRACTION = 0.25        # Tracking's range may be this fraction off...
 RANGE_TOL_MIN_M = 3.0            # ...but never held tighter than this
-FOLLOW_DISTANCE_M = 6.0          # Movement's default
-FOLLOW_TOL_M = 2.5
+FOLLOW_DISTANCE_M = 20.0         # asked of Movement; its default 6 m puts the feet out of frame
+MOVEMENT_MIN_DISTANCE_M = 14.0   # Movement's clamp band around it (hard caps are 2 and 30 m)
+MOVEMENT_MAX_DISTANCE_M = 30.0
+# tan of the largest angle below the camera axis at which the feet stay in frame: the camera's
+# vertical field of view is 42 deg (half 21.2 deg) less Tracking's 12 px edge margin = 20.8 deg
+FEET_IN_FRAME = 0.38
+LOST_ABORT_S = 20.0              # no Tracking message this long while Movement runs: abort
+TRACKING_FRESH_S = 2.0           # a Tracking message this recent counts as "Tracking sees them"
+REDETECT_WAIT_S = 30.0           # at the engage point, wait this long for Perception to see them
+MOVEMENT_PARAMS = os.path.join(LOG_DIR, "movement_params.yaml")
+FOLLOW_TOL_M = 4.0
 FOLLOW_STABLE_S = 10.0           # inside the follow band this long counts as followed
 LANDED_Z_M = -0.3                # NED z above this: on the ground
 
@@ -148,14 +158,29 @@ def check_leg(north_m, east_m, speed_mps, alt_m):
         raise ValueError("height must be in [%.1f, %.0f] m" % (MIN_ALT_M, MAX_ALT_M))
 
 
-def leg_offset(pos_ne, person_ne, max_leg_m=MAX_LEG_M):
-    """(north, east, remaining_m): the next leg towards the person, at most max_leg_m long."""
+def leg_offset(pos_ne, person_ne, max_leg_m=MAX_LEG_M, stop_short_m=0.0):
+    """(north, east, remaining_m): the next leg towards the person, at most max_leg_m long and
+    never ending closer than stop_short_m to them. remaining_m is the full distance to them."""
     dn, de = person_ne[0] - pos_ne[0], person_ne[1] - pos_ne[1]
     remaining = math.hypot(dn, de)
-    if remaining <= max_leg_m or remaining == 0.0:
-        return dn, de, remaining
-    k = max_leg_m / remaining
+    leg = min(max_leg_m, max(0.0, remaining - stop_short_m))
+    if remaining == 0.0 or leg == 0.0:
+        return 0.0, 0.0, remaining
+    k = leg / remaining
     return dn * k, de * k, remaining
+
+
+def follow_geometry_ok(height_m, follow_distance_m):
+    """True when a person follow_distance_m ahead, 1.9 m tall, keeps their feet in frame from a
+    camera height_m above the ground that looks level."""
+    return follow_distance_m > 0 and height_m / follow_distance_m <= FEET_IN_FRAME
+
+
+def movement_params_text(follow_distance_m=FOLLOW_DISTANCE_M):
+    """Movement parameter file: follow at follow_distance_m inside its clamp band."""
+    return ("/**:\n  ros__parameters:\n    safe_distance_m: %.1f\n    min_distance_m: %.1f\n"
+            "    max_distance_m: %.1f\n" % (follow_distance_m, MOVEMENT_MIN_DISTANCE_M,
+                                             MOVEMENT_MAX_DISTANCE_M))
 
 
 def offset_latlon(lat_deg, lon_deg, north_m, east_m):
@@ -324,6 +349,7 @@ class Pilot:
         self.last_detection = None
         self.geo = None            # (lat, lon) of the drone from Geolocation
         self.tracking = None       # (lat, lon, ex, ey, ez) of the person from Tracking
+        self.tracking_at = 0.0     # monotonic arrival time of the last Tracking message
         self.node = None
 
     # -- ROS side -----------------------------------------------------------------------------
@@ -347,10 +373,12 @@ class Pilot:
         self.node.create_subscription(
             GeolocationState, "/geolocation/position",
             lambda m: setattr(self, "geo", (m.latitude_deg, m.longitude_deg)), qos)
-        self.node.create_subscription(
-            TrackingState, "/tracking/position",
-            lambda m: setattr(self, "tracking", (m.latitude_deg, m.longitude_deg, m.error_x_m,
-                                                 m.error_y_m, m.error_z_m)), qos)
+        def on_tracking(msg):
+            self.tracking = (msg.latitude_deg, msg.longitude_deg, msg.error_x_m, msg.error_y_m,
+                             msg.error_z_m)
+            self.tracking_at = time.monotonic()
+
+        self.node.create_subscription(TrackingState, "/tracking/position", on_tracking, qos)
 
     def close(self):
         try:
@@ -456,12 +484,6 @@ class Pilot:
         lat, lon = offset_latlon(lat, lon, north_m, east_m)
         return self.reposition(lat, lon, alt, speed_mps)
 
-    def change_height(self, new_height_m, speed_mps=MAX_SPEED_MPS):
-        """Climb or descend in place to new_height_m above the launch point."""
-        check_leg(0.0, 0.0, speed_mps, new_height_m)
-        lat, lon, alt, rel = self.global_pos
-        return self.reposition(lat, lon, alt + (new_height_m - rel), speed_mps)
-
     def hold(self):
         """Stop where it is: go to the current position."""
         if self.global_pos is None:
@@ -482,31 +504,30 @@ class Pilot:
 # ================================================================================================
 
 def fly_approach(pilot, person_ne):
-    """Fly towards the person in short legs until Perception sees them. Returns
-    (seen, flown_m, remaining_m, reason). The vehicle is holding when this returns."""
+    """Fly towards the person in short legs until ENGAGE_DISTANCE_M away, noting when Perception
+    first sees them. Returns (first_seen_m, flown_m, remaining_m, reason); reason is None when
+    the engage point was reached. The vehicle is holding when this returns."""
     start = pilot.ne()
     started = time.monotonic()
-    flown = 0.0
+    first_seen_m = None
     reason = None
     while reason is None:
         cur = pilot.ne()
-        dn, de, remaining = leg_offset(cur, person_ne)
-        if remaining <= GIVE_UP_M:
-            reason = "not seen within %.0f m of the person" % GIVE_UP_M
-            break
+        dn, de, remaining = leg_offset(cur, person_ne, MAX_LEG_M, ENGAGE_DISTANCE_M)
+        if remaining - ENGAGE_DISTANCE_M <= ARRIVE_M:
+            break                                  # close enough: this is the engage point
         if not pilot.fly_leg(dn, de, MAX_SPEED_MPS):
             reason = "the autopilot refused the fly-to-point command"
             break
         end = (cur[0] + dn, cur[1] + de)
         best, progress_at = math.hypot(dn, de), time.monotonic()
-        while True:
+        while reason is None:
             pilot.pump()
             now = time.monotonic()
-            if seen_enough(pilot.detections, now):
-                pilot.hold()
-                pilot.wait_until(lambda: pilot.speed_mps() < 0.5, STOP_WAIT_S)
-                here = pilot.ne()
-                return True, math.dist(start, here), math.dist(here, person_ne), None
+            if first_seen_m is None and seen_enough(pilot.detections, now):
+                first_seen_m = math.dist(pilot.ne(), person_ne)
+                say("person spotted %.0f m ahead (confidence %.2f); closing in"
+                    % (first_seen_m, pilot.last_detection.confidence))
             left = math.dist(pilot.ne(), end)
             if left <= ARRIVE_M:
                 break
@@ -514,18 +535,14 @@ def fly_approach(pilot, person_ne):
                 best, progress_at = left, now
             elif now - progress_at > STALL_S:
                 reason = "no progress for %.0f s" % STALL_S
-                break
-            if now - started > APPROACH_TOTAL_S:
+            elif now - started > APPROACH_TOTAL_S:
                 reason = "the approach took more than %.0f s" % APPROACH_TOTAL_S
-                break
-            flown = math.dist(start, pilot.ne())
-            if flown > MAX_FLOWN_M:
+            elif math.dist(start, pilot.ne()) > MAX_FLOWN_M:
                 reason = "flew more than %.0f m" % MAX_FLOWN_M
-                break
     pilot.hold()
     pilot.wait_until(lambda: pilot.speed_mps() < 0.5, STOP_WAIT_S)
     here = pilot.ne()
-    return False, math.dist(start, here), math.dist(here, person_ne), reason
+    return first_seen_m, math.dist(start, here), math.dist(here, person_ne), reason
 
 
 def tracking_range_m(pilot):
@@ -561,17 +578,21 @@ def mission(args, geometry):
         say("at %.1f m. Flying towards the person, %.0f m away, in legs of %.0f m at %.0f m/s, "
             "watching the camera" % (pilot.height_m(), geometry["distance_m"], MAX_LEG_M,
                                      MAX_SPEED_MPS))
-        seen, flown, remaining, reason = fly_approach(pilot, person_ne)
-        summary.update(flown_m=flown, remaining_m=remaining, seen=seen)
-        if not seen:
-            raise RuntimeError("person not found: %s (flew %.0f m, %.0f m short)"
+        first_seen_m, flown, remaining, reason = fly_approach(pilot, person_ne)
+        summary.update(flown_m=flown, remaining_m=remaining, first_seen_m=first_seen_m)
+        if reason:
+            raise RuntimeError("%s (flew %.0f m, %.0f m from the person)"
                                % (reason, flown, remaining))
-        det = pilot.last_detection
-        say("person spotted %.0f m ahead after flying %.0f m (confidence %.2f). Holding."
-            % (remaining, flown, det.confidence))
+        say("at the engage point: %.0f m from the person after flying %.0f m, holding at %.1f m"
+            % (remaining, flown, pilot.height_m()))
 
-        say("checking with Tracking where they are")
-        if not pilot.wait_until(lambda: tracking_range_m(pilot) is not None, TRACKING_WAIT_S):
+        say("checking that Perception and Tracking both have them")
+        if not pilot.wait_until(lambda: seen_enough(pilot.detections, time.monotonic()),
+                                REDETECT_WAIT_S):
+            raise RuntimeError("Perception does not see the person from the engage point")
+        summary["seen"] = True
+        if not pilot.wait_until(lambda: time.monotonic() - pilot.tracking_at <= TRACKING_FRESH_S,
+                                TRACKING_WAIT_S):
             raise RuntimeError("Tracking published no position for the person")
         measured = tracking_range_m(pilot)
         true_m = math.dist(pilot.ne(), person_ne)
@@ -580,16 +601,18 @@ def mission(args, geometry):
             measured, true_m, "agreed" if range_ok(measured, true_m) else "DISAGREE"))
         if not range_ok(measured, true_m):
             raise RuntimeError("Tracking's range is off by more than the tolerance")
+        if not follow_geometry_ok(pilot.height_m(), FOLLOW_DISTANCE_M):
+            raise RuntimeError("at %.1f m the person's feet leave the frame inside %.0f m"
+                               % (pilot.height_m(), FOLLOW_DISTANCE_M))
 
-        say("descending to %.1f m so the camera sees the whole person" % FOLLOW_ALT_M)
-        if not pilot.change_height(FOLLOW_ALT_M):
-            raise RuntimeError("the descent was refused")
-        if not pilot.wait_until(lambda: pilot.height_m() <= FOLLOW_ALT_M + 0.4, DESCENT_WAIT_S):
-            raise RuntimeError("did not descend to %.1f m (at %.1f m)" % (FOLLOW_ALT_M,
-                                                                            pilot.height_m()))
-
-        say("switching on the automatic follow (Movement)")
-        start("movement", ["ros2", "launch", "movement", "movement.launch.py"])
+        say("switching on the automatic follow (Movement), asked to follow at %.0f m"
+            % FOLLOW_DISTANCE_M)
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(MOVEMENT_PARAMS, "w") as fh:
+            fh.write(movement_params_text())
+        start("movement", ["ros2", "launch", "movement", "movement.launch.py",
+                           "params_file:=" + MOVEMENT_PARAMS])
+        movement_started = time.monotonic()
         band_since = None
         end = time.monotonic() + FOLLOW_TIMEOUT_S
         closest = float("inf")
@@ -597,6 +620,9 @@ def mission(args, geometry):
             pilot.pump()
             if procs["movement"].poll() is not None:
                 raise RuntimeError("Movement exited, see %s/movement.log" % LOG_DIR)
+            if (time.monotonic() - max(pilot.tracking_at, movement_started) > LOST_ABORT_S):
+                raise RuntimeError("Tracking lost the person for %.0f s while Movement was on"
+                                   % LOST_ABORT_S)
             dist = math.dist(pilot.ne(), person_ne)
             closest = min(closest, dist)
             if in_follow_band(dist):
@@ -685,6 +711,12 @@ def main(argv=None):
         print("error: a simulator is already running; stop it first", file=sys.stderr)
         return 2
     started = time.monotonic()
+
+    def interrupted(signum, _frame):
+        raise KeyboardInterrupt()      # same path as Ctrl+C: hold, land, tear down
+
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
     summary, pilot = mission(args, geometry)
     finish(args, pilot, summary)
     ok = (summary.get("followed") and summary.get("landed") and summary.get("clean_shutdown")

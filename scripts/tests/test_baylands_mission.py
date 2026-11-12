@@ -87,6 +87,24 @@ def test_leg_offset_short_distances_go_all_the_way(pos, person):
     assert remaining == pytest.approx(math.hypot(dn, de))
 
 
+@pytest.mark.parametrize("remaining,leg", [
+    (100.0, 30.0), (55.0, 30.0), (54.0, 29.0), (30.0, 5.0), (25.0, 0.0), (20.0, 0.0),
+])
+def test_leg_offset_stops_short_of_the_person(remaining, leg):
+    dn, de, rem = bm.leg_offset((0.0, 0.0), (0.0, remaining), 30.0, stop_short_m=25.0)
+    assert rem == pytest.approx(remaining)
+    assert (dn, de) == pytest.approx((0.0, leg))
+
+
+def test_leg_offset_never_ends_closer_than_stop_short():
+    pos, person = (-100.0, -15.0), (0.0, 0.0)
+    for _ in range(20):
+        dn, de, remaining = bm.leg_offset(pos, person, 30.0, 25.0)
+        pos = (pos[0] + dn, pos[1] + de)
+        assert math.dist(pos, person) >= 25.0 - 1e-9
+    assert math.dist(pos, person) == pytest.approx(25.0)
+
+
 @pytest.mark.parametrize("lat", [0.0, 37.4, 47.397971, -33.9])
 def test_offset_latlon_round_trip(lat):
     lat2, lon2 = bm.offset_latlon(lat, 8.5, 30.0, 40.0)
@@ -119,10 +137,49 @@ def test_check_leg_refuses_out_of_limit_legs(n, e, v, h):
 def test_the_limits_are_the_ones_agents_md_allows():
     assert bm.CRUISE_ALT_M == pytest.approx(6.096, abs=1e-3)           # 20 ft, as the user asked
     assert bm.CRUISE_ALT_M <= 10.0 and bm.MAX_ALT_M <= 10.0            # takeoff cap
-    assert bm.MIN_ALT_M <= bm.FOLLOW_ALT_M <= bm.CRUISE_ALT_M <= bm.MAX_ALT_M
+    assert bm.MIN_ALT_M <= bm.CRUISE_ALT_M <= bm.MAX_ALT_M
     assert bm.MAX_LEG_M <= 60.0 and bm.MAX_SPEED_MPS <= 8.0            # the sim helper's limits
-    assert bm.GIVE_UP_M > bm.FOLLOW_DISTANCE_M
     assert bm.MAX_MISSION_M <= 300.0
+
+
+def test_engaging_closer_than_the_first_sighting_but_outside_the_follow_distance():
+    assert bm.ENGAGE_DISTANCE_M < 63.0                  # the old run engaged at 63 m
+    assert bm.ENGAGE_DISTANCE_M > bm.FOLLOW_DISTANCE_M  # Movement still has a little way to close
+
+
+def test_the_mission_never_descends():
+    text = open(os.path.join(SCRIPTS, "baylands_mission.py")).read()
+    assert "FOLLOW_ALT_M" not in text and "change_height" not in text
+
+
+@pytest.mark.parametrize("height,distance,ok", [
+    (6.096, 20.0, True),            # the mission's 20 ft at 20 m: feet at 17 deg below the axis
+    (6.096, 16.1, True), (6.096, 16.0, False),
+    (6.096, 6.0, False),            # Movement's default 6 m follow at 20 ft: the old failure
+    (1.5, 6.0, True),               # what sim_check does: 1.5 m at 6 m
+    (3.0, 6.0, False), (3.0, 9.0, True), (3.0, 0.0, False),
+])
+def test_follow_geometry_keeps_the_feet_in_frame(height, distance, ok):
+    assert bm.follow_geometry_ok(height, distance) is ok
+
+
+def test_the_missions_height_and_follow_distance_keep_the_feet_in_frame():
+    assert bm.follow_geometry_ok(bm.CRUISE_ALT_M, bm.FOLLOW_DISTANCE_M)
+    assert bm.follow_geometry_ok(bm.CRUISE_ALT_M, bm.ENGAGE_DISTANCE_M)
+
+
+def test_the_follow_distance_sits_inside_movements_clamp_band_and_hard_caps():
+    assert 2.0 <= bm.MOVEMENT_MIN_DISTANCE_M < bm.FOLLOW_DISTANCE_M < bm.MOVEMENT_MAX_DISTANCE_M
+    assert bm.MOVEMENT_MAX_DISTANCE_M <= 30.0
+
+
+def test_movement_params_file_text():
+    text = bm.movement_params_text()
+    assert text == ("/**:\n  ros__parameters:\n    safe_distance_m: 20.0\n"
+                    "    min_distance_m: 14.0\n    max_distance_m: 30.0\n")
+    import yaml
+    params = yaml.safe_load(text)["/**"]["ros__parameters"]
+    assert params == {"safe_distance_m": 20.0, "min_distance_m": 14.0, "max_distance_m": 30.0}
 
 
 def test_only_the_local_mavlink_bridge_is_used():
@@ -141,8 +198,8 @@ def test_range_ok(measured, true, ok):
     assert bm.range_ok(measured, true) is ok
 
 
-@pytest.mark.parametrize("d,ok", [(6.0, True), (3.5, True), (8.5, True), (3.49, False),
-                                  (8.51, False), (25.0, False)])
+@pytest.mark.parametrize("d,ok", [(20.0, True), (16.0, True), (24.0, True), (15.99, False),
+                                  (24.01, False), (6.0, False), (63.0, False)])
 def test_in_follow_band(d, ok):
     assert bm.in_follow_band(d) is ok
 
