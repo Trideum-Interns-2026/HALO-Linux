@@ -12,6 +12,13 @@
   "workspaceFolder": "/workspace",
     "overrideCommand": false,
 
+  // Always forward these, whichever computer opens the container.
+  // 8000: ground-station web API and dashboard (GroundstationAPI/).
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "Ground-station dashboard", "onAutoForward": "notify" }
+  },
+
   // Keeps the container running after VS Code disconnects, so you don't
   // lose your dev container between sessions.
   "shutdownAction": "none",

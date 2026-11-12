@@ -2,7 +2,7 @@
 
 This is the full path from a fresh Windows machine to having PX4 SITL +
 Gazebo running with GPU acceleration, and a working dev container for
-writing/building your own code (Movement, Tracking_Geolocation, etc.).
+writing/building your own code (Movement, Tracking, Geolocation, etc.).
 
 **Important:** everything in this guide happens inside WSL2's own Linux
 filesystem, not your `C:\Users\...` folder. Cloning into the Windows
@@ -66,18 +66,7 @@ docker compose build
 First build takes a few minutes (downloading the base PX4 dev image, MAVSDK,
 etc.). Subsequent builds reuse Docker's layer cache and are much faster.
 
-## 5. Quick check: launch the sim standalone
-
-This is the fastest way to confirm everything works before touching VS Code:
-```bash
-python3 run.py
-```
-This clones PX4-Autopilot into a persistent volume (first run only, several
-minutes) and launches Gazebo with the default vehicle model. A Gazebo window
-should appear directly on your Windows desktop via WSLg — no extra X server
-setup needed. Ctrl+C to stop it when you're done checking.
-
-## 6. Open the dev container for development
+## 5. Open the dev container for development
 
 This is the environment you actually write and build code in.
 
@@ -93,56 +82,43 @@ Container"**. First time, this builds the dev container on top of the same
 image. Wait for it to finish and attach.
 
 You should now see your own repo files in the Explorer (`Movement/`,
-`Tracking_Geolocation/`, `Dockerfile`, etc.) — **not** PX4-Autopilot's
+`Tracking/`, `Geolocation/`, `Dockerfile`, etc.) — **not** PX4-Autopilot's
 source tree. PX4's source lives in a separate volume, kept intentionally
 out of your way.
 
-## 7. Run SITL + Gazebo from inside the dev container
+## 6. Run the stack from inside the dev container
 
 Open a terminal in VS Code (it's already inside the dev container). Run:
 ```bash
 fly
 ```
-This starts PX4 SITL and Gazebo only. Leave this terminal running.
+This starts PX4 SITL and Gazebo. Leave this terminal running. `HEADLESS=1 fly`
+runs without the Gazebo window. `fly` does not arm or take off.
 
-In a second terminal, run `perceive` to spawn the selected test target, start
-the camera bridge and detector, and open the debug-image viewer. In a third
-terminal, run `track`; it builds and runs the Kalman/geographic tracker and
-reads vehicle position and heading over MAVSDK to publish the filtered target
-position and ROI updates over MAVLink. It does not control vehicle movement
-or arm, take off, or land. Press Ctrl+C in the `track` terminal to stop
-tracking. Stop `perceive` and `fly` in their own terminals when finished.
+Start the other pieces in their own terminals as needed:
+- `simlinks`: sim only, run next to `fly`. GPS bridge to `/gps/fix` and the
+  uXRCE-DDS agent (`/fmu/...`).
+- `spawn_person [x] [y] [yaw]`: test target, default `5 0 0` (5 m ahead,
+  facing the drone).
+- `perceive`: camera bridge and person detector. The detector needs Triton,
+  so this runs on the Spark profile only.
+- `tracking`, `geolocation`: position services.
+- `movement`: follows the person. Needs an armed, airborne vehicle.
+- `ui`: UI bridge node. `groundstation`: web dashboard at
+  http://127.0.0.1:8000 (port 8000 is forwarded by the dev container).
 
-## 8. Build and run your own code
+Arming and flight:
+- Arm and take off in QGroundControl, or with `sitl_vehicle arm`,
+  `sitl_vehicle takeoff [m]` (SITL only, takeoff up to 10 m), `sitl_vehicle land`,
+  `sitl_vehicle disarm`, `sitl_vehicle status`.
+- `sim_check [--gui|--watch]`: runs the whole stack, arms and flies it, prints
+  a PASS/FAIL table, then tears down.
+- `simstack up [--gui]`, `simstack status`, `simstack down`: whole stack in one
+  command. It never arms the vehicle.
 
-`run_all.py` works from **either** the dev container or your WSL2 host
-terminal — it auto-detects where it's running and adapts (direct
-`cmake`/`make` inside the dev container, a throwaway Docker image if run
-from the WSL2 host).
+## 7. Run the tests
 
-From the repository root:
-```bash
-python3 run_all.py <folder> <file.cpp>
-```
-The folder search is recursive, so this runs the file inside the
-Geolocation subfolder:
-```bash
-python3 run_all.py Tracking_Geolocation takeoff_forward_back.cpp
-```
-For the Movement folder:
-```bash
-python3 run_all.py Movement test_takeoff.cpp
-```
-Either way, it connects straight to whatever SITL instance is currently
-running (started via `run.py` or `fly`) — no extra config needed.
-
-**Three things, worth keeping straight:**
-- **`run.py`** — WSL2 host terminal only (not the dev container). Launches
-  the standalone PX4 SITL + Gazebo container.
-- **`fly`** — inside the dev container only. Launches SITL from within
-  the dev container itself.
-- **`run_all.py`** — works from either place. Builds and runs one of your
-  C++ programs against whatever SITL instance is currently running.
+`halo_test` runs all tests for every service. Tests need no sim, GPU or Triton.
 
 ---
 
@@ -150,17 +126,15 @@ running (started via `run.py` or `fly`) — no extra config needed.
 
 Check these docs, in the same repo, for known issues and fixes:
 - `PX4-SITL-Docker-Troubleshooting.md` — build/runtime issues with PX4 itself
-- `WSL-Git-Setup.md` — git permission/ownership issues specific to WSL2
 
 A few of the most common gotchas, up front:
 - **Opening the repo from the Windows path** (`C:\Users\...`) instead of
   WSL2's own filesystem breaks GPU-accelerated Gazebo rendering entirely.
   Always `code .` from inside the WSL2 terminal.
-- **Running `run.py` or `run_all.py` from inside the dev container**
-  doesn't work — both call `docker` directly, and the dev container has no
-  Docker-in-Docker setup. Run both from your WSL2 host terminal. If you're
-  already in the dev container and just want to launch SITL there, use
-  `fly` instead.
+- **Running `docker` commands from inside the dev container** doesn't work —
+  the dev container has no Docker-in-Docker setup. Run `docker compose` from
+  your WSL2 host terminal. Inside the dev container, use `fly` and the other
+  commands in section 6.
 - **Git commands run from inside the dev container** can leave files
   owned by `root` on the host, causing permission errors later. Do git
   operations from your WSL2 terminal, not the dev container terminal.

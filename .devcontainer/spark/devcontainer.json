@@ -36,8 +36,10 @@
   // the video stream (WebSocket) on this one port. 5760: MAVLink as a TCP
   // stream for QGroundControl on the laptop (QGC → Comm Links → TCP,
   // 127.0.0.1:5760). UDP can't be forwarded, which is why it's TCP.
-  "forwardPorts": [8080, 5760],
+  // 8000: ground-station web API and dashboard (GroundstationAPI/).
+  "forwardPorts": [8080, 5760, 8000],
   "portsAttributes": {
+    "8000": { "label": "Ground-station dashboard", "onAutoForward": "notify" },
     "8080": { "label": "Selkies desktop", "onAutoForward": "openBrowser" },
     "5760": { "label": "MAVLink → QGroundControl (laptop)", "onAutoForward": "silent" }
   },

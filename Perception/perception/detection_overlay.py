@@ -8,9 +8,14 @@ Topics
     in   /camera/front/image_raw   sensor_msgs/Image (reliable, depth 1; see image_reliability)
     in   /perception/detection    perception_msgs/Detection
     out  /perception/debug_image   sensor_msgs/Image (bgr8, scaled, header copied from the input)
+    out  <output_topic>/compressed sensor_msgs/CompressedImage (JPEG; only when publish_compressed)
+
+The box is moved to each image's own timestamp (constant-velocity extrapolation from the last two
+detections, at most max_predict_s ahead), so it sits on the person instead of lagging behind.
 
 Parameters (all optional, see declare_parameter below for defaults)
-    image_topic, detection_topic, output_topic, image_reliability, scale, max_age_s
+    image_topic, detection_topic, output_topic, image_reliability, scale, max_age_s,
+    max_predict_s, publish_compressed, jpeg_quality
 """
 
 import math
@@ -20,8 +25,9 @@ import rclpy
 from cv_bridge import CvBridge, CvBridgeError
 from perception_msgs.msg import Detection
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 
+from perception.box_logic import extrapolate_box
 from perception.image_qos import IMAGE_RELIABILITY, image_qos
 
 IMAGE_TOPIC = "/camera/front/image_raw"        # default input (sim camera bridge)
@@ -31,6 +37,8 @@ DEFAULT_SCALE = 0.5      # the 1080p frame is shrunk so the viewer stays light
 MIN_SCALE = 0.05
 MAX_SCALE = 1.0
 DEFAULT_MAX_AGE_S = 0.5  # a box older than this (vs the image stamp) is not drawn
+DEFAULT_MAX_PREDICT_S = 0.15  # how far ahead of the newest detection the box may be moved
+DEFAULT_JPEG_QUALITY = 80
 BOX_COLOR_BGR = (0, 255, 0)
 LABEL_COLOR_BGR = (0, 0, 0)
 BOX_THICKNESS_PX = 2
@@ -95,8 +103,8 @@ def draw_detection(frame, box, confidence):
 class DetectionOverlay(Node):
     """ROS2 node: camera frames and detections in, a picture with the box drawn on it out."""
 
-    def __init__(self):
-        super().__init__("detection_overlay")
+    def __init__(self, **kwargs):
+        super().__init__("detection_overlay", **kwargs)
 
         self.image_topic = self.declare_parameter("image_topic", IMAGE_TOPIC).value
         self.detection_topic = self.declare_parameter("detection_topic", DETECTION_TOPIC).value
@@ -105,26 +113,38 @@ class DetectionOverlay(Node):
             "image_reliability", IMAGE_RELIABILITY).value
         self.scale = sanitize_scale(self.declare_parameter("scale", DEFAULT_SCALE).value)
         self.max_age_s = float(self.declare_parameter("max_age_s", DEFAULT_MAX_AGE_S).value)
+        self.max_predict_s = float(
+            self.declare_parameter("max_predict_s", DEFAULT_MAX_PREDICT_S).value)
+        self.publish_compressed = bool(self.declare_parameter("publish_compressed", False).value)
+        self.jpeg_quality = int(
+            self.declare_parameter("jpeg_quality", DEFAULT_JPEG_QUALITY).value)
 
         self.bridge = CvBridge()
         self._latest = None   # (stamp_s, box, confidence) of the newest detection
+        self._previous = None  # (stamp_s, box) of the detection before it, for the velocity
 
         self.sub_image = self.create_subscription(
             Image, self.image_topic, self.on_image, image_qos(self.image_reliability))
         self.sub_detection = self.create_subscription(
             Detection, self.detection_topic, self.on_detection, 10)
         self.pub = self.create_publisher(Image, self.output_topic, 10)
+        self.pub_compressed = (
+            self.create_publisher(CompressedImage, self.output_topic + "/compressed", 10)
+            if self.publish_compressed else None)
 
         self.get_logger().info(
             f"Ready: image={self.image_topic}({self.image_reliability}) "
             f"detection={self.detection_topic} output={self.output_topic} "
-            f"scale={self.scale} max_age={self.max_age_s}s")
+            f"scale={self.scale} max_age={self.max_age_s}s predict<={self.max_predict_s}s "
+            f"compressed={self.publish_compressed}")
 
     def on_detection(self, msg):
         """Remember the newest detection; the next image draws it."""
         box = (float(msg.x_min), float(msg.y_min), float(msg.x_max), float(msg.y_max))
         if not all(math.isfinite(v) for v in box):
             return
+        if self._latest is not None:
+            self._previous = (self._latest[0], self._latest[1])
         self._latest = (stamp_to_s(msg.header.stamp), box, float(msg.confidence))
 
     def on_image(self, msg):
@@ -142,11 +162,21 @@ class DetectionOverlay(Node):
             frame = frame.copy()
         if self._latest is not None:
             stamp_s, box, confidence = self._latest
-            if is_fresh(stamp_s, stamp_to_s(msg.header.stamp), self.max_age_s):
+            image_s = stamp_to_s(msg.header.stamp)
+            if is_fresh(stamp_s, image_s, self.max_age_s):
+                box = extrapolate_box(self._previous, (stamp_s, box), image_s, self.max_predict_s)
                 draw_detection(frame, scale_box(box, self.scale), confidence)
         out = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
         out.header = msg.header        # same timestamp and frame as the camera image
         self.pub.publish(out)
+        if self.pub_compressed is not None:
+            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+            if ok:
+                packed = CompressedImage()
+                packed.header = msg.header
+                packed.format = "jpeg"
+                packed.data = jpeg.tobytes()
+                self.pub_compressed.publish(packed)
 
 
 def main(args=None):

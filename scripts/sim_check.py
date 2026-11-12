@@ -41,7 +41,10 @@ CAMERA_RATE_WINDOW_S = 10.0
 CAMERA_RATE_PASS_HZ = 12.0
 CAMERA_RATE_WARN_HZ = 5.0
 TAKEOFF_ALT_M = 1.5       # low enough that a person 6 m away is not cut off at the bottom of the image
-TAKEOFF_SETTLE_S = 10.0
+# Wall-clock limit for reaching TAKEOFF_MIN_ALT_M. PX4 spools up and ramps the climb for a few
+# seconds, and a loaded machine runs the sim slower than real time, so 10 s was too tight (the
+# vehicle was at 1.0 m and still climbing). The wait ends as soon as the height is reached.
+TAKEOFF_SETTLE_S = 40.0
 LINK_TIMEOUT_S = 40.0
 ARM_TIMEOUT_S = 30.0
 TAKEOFF_MIN_ALT_M = 1.2
@@ -74,7 +77,8 @@ LIMIT_ORBIT_STRAFE = 1.5   # Movement's orbit-only speed cap (max_orbit_speed_m_
 LIMIT_YAW_DEG_S = 45.0
 LIMIT_SLACK = 1.001
 LEFTOVER_PATTERN = r"px4|gz sim|MicroXRCE|parameter_bridge|ros2 launch|yolo_person|tracking_node|" \
-                   r"geolocation_node|movement_node|rqt_image_view|sitl_vehicle (link|trace)"
+                   r"geolocation_node|movement_node|rqt_image_view|debug_view|" \
+                   r"sitl_vehicle (link|trace)"
 
 SPEED = 1.0           # --speed: Gazebo real-time factor requested through PX4_SIM_SPEED_FACTOR
 results = []          # (name, status, detail)
@@ -405,7 +409,7 @@ def check_services(probe, have_triton):
     status = ("PASS" if hz >= CAMERA_RATE_PASS_HZ * SPEED else
               "WARN" if hz >= CAMERA_RATE_WARN_HZ * SPEED else "FAIL")
     record("camera_rate", status, "%.1f Hz reliable (sim camera is %.0f Hz wall); gazebo side: %s"
-           % (hz, 15.0 * SPEED, gz_camera_rate()))
+           % (hz, 30.0 * SPEED, gz_camera_rate()))
     rtf = gz_rtf()
     record("sim_speed", "SKIP" if rtf is None else "PASS" if rtf >= 0.9 * SPEED else "WARN",
            "real-time factor %s (asked for %.1f)" % ("unknown" if rtf is None else "%.2f" % rtf,
@@ -642,11 +646,15 @@ def main(argv=None):
         if args.gui:
             # The camera image as Perception sees it, with the detected box drawn on it by
             # detection_overlay, so the person can be watched without hunting for them in the 3D
-            # view (rqt_image_view, no vglrun: plain Qt widgets). Without Triton there is no
-            # detector and no overlay, so the plain camera image is shown instead.
-            view_topic = "/perception/debug_image" if have_triton else "/camera/front/image_raw"
-            start("perception_gui", ["ros2", "run", "rqt_image_view", "rqt_image_view",
-                                     view_topic], dict(speed_env(), DISPLAY=":0"))
+            # view. debug_view shows the overlay's JPEG stream (newest frame only, no vglrun:
+            # plain Qt widgets); rqt_image_view on the raw image froze and lagged. Without Triton
+            # there is no detector and no overlay, so the plain camera image is shown instead.
+            if have_triton:
+                gui_cmd = ["ros2", "run", "perception", "debug_view"]
+            else:
+                gui_cmd = ["ros2", "run", "rqt_image_view", "rqt_image_view",
+                           "/camera/front/image_raw"]
+            start("perception_gui", gui_cmd, dict(speed_env(), DISPLAY=":0"))
         # 6 m ahead = the follow distance
         spawn_rc, spawn_out = run([SPAWN_PERSON, "6", "0", "0"], timeout=30.0)
         log("spawn_person rc=%s: %s" % (spawn_rc, " ".join(spawn_out.split())[-160:]))

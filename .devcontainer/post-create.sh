@@ -14,9 +14,10 @@ ln -sfn /workspace/Geolocation /opt/ros2_ws/src/Geolocation
 ln -sfn /workspace/tracking_msgs /opt/ros2_ws/src/tracking_msgs
 ln -sfn /workspace/Tracking /opt/ros2_ws/src/Tracking
 ln -sfn /workspace/Movement /opt/ros2_ws/src/Movement
+ln -sfn /workspace/UI /opt/ros2_ws/src/UI
 (cd /opt/ros2_ws && colcon build \
     --packages-select perception_msgs perception geolocation_msgs geolocation \
-        tracking_msgs tracking movement \
+        tracking_msgs tracking movement ui \
     --symlink-install)
 
 ln -sfn /workspace/Tracking/scripts/tracking /usr/local/bin/tracking
@@ -56,14 +57,12 @@ sed -i '/ros2_ws\/install\/setup.bash/i [ -f /opt/px4_ros2/install/setup.bash ] 
 # setup so gz-tools can still find those verbs.
 grep -q "GZ_CONFIG_PATH" /etc/bash.bashrc || \
     echo 'export GZ_CONFIG_PATH="${GZ_CONFIG_PATH}:/usr/share/gz"' >> /etc/bash.bashrc
-# Drop aliases for scripts that no longer exist, and the old `perceive`
-# (it ran the deleted demo script), so they can't linger in a reused container.
-sed -i '/^alias spawn_sphere=/d; /^alias perceive=/d' /etc/bash.bashrc
-grep -q "alias spawn_person=" /etc/bash.bashrc || \
-    echo "alias spawn_person='/workspace/Perception/scripts/spawn_person.sh'" >> /etc/bash.bashrc
-# Drop aliases for scripts that no longer exist.
-sed -i '/^alias spawn_sphere=/d; /^alias perceive=/d; /^alias track=/d' /etc/bash.bashrc
+# Drop aliases for scripts that no longer exist, so they can't linger in a reused container.
+sed -i '/^alias spawn_sphere=/d; /^alias track=/d' /etc/bash.bashrc
+sed -i '/^alias spawn_person=/d' /etc/bash.bashrc
+echo "alias spawn_person='/workspace/Perception/scripts/spawn_person.sh'" >> /etc/bash.bashrc
 # `perceive` starts the camera bridge and YOLO detector (publishes /perception/detection).
+sed -i '/^alias perceive=/d' /etc/bash.bashrc
 echo "alias perceive='ros2 launch perception perception.launch.py'" >> /etc/bash.bashrc
 sed -i '/^alias simlinks=/d' /etc/bash.bashrc
 echo "alias simlinks='/workspace/scripts/sim_links'" >> /etc/bash.bashrc
@@ -76,6 +75,16 @@ sed -i '/^alias tracking=/d' /etc/bash.bashrc
 sed -i '/^alias geolocation=/d' /etc/bash.bashrc
 echo "alias tracking='ros2 launch tracking tracking.launch.py'" >> /etc/bash.bashrc
 echo "alias geolocation='ros2 launch geolocation geolocation.launch.py'" >> /etc/bash.bashrc
+sed -i '/^alias ui=/d' /etc/bash.bashrc
+echo "alias ui='ros2 launch ui ui.launch.py'" >> /etc/bash.bashrc
 # `movement` = the movement service (follows the person over MAVLink offboard velocity)
 sed -i '/^alias movement=/d' /etc/bash.bashrc
 echo "alias movement='ros2 launch movement movement.launch.py'" >> /etc/bash.bashrc
+# Whole sim stack in one command (up/down/status; never arms), the web dashboard, and all tests.
+sed -i '/^alias simstack=/d; /^alias groundstation=/d; /^alias halo_test=/d' /etc/bash.bashrc
+echo "alias simstack='/workspace/scripts/sim_stack'" >> /etc/bash.bashrc
+echo "alias groundstation='python3 -m uvicorn main:app --app-dir /workspace/GroundstationAPI --host 127.0.0.1 --port 8000'" >> /etc/bash.bashrc
+echo "alias halo_test='/workspace/scripts/halo_test'" >> /etc/bash.bashrc
+# Web API dependencies (FastAPI + uvicorn) for `groundstation`; pip-only, no rosdep key.
+python3 -m pip install -q --break-system-packages -r /workspace/GroundstationAPI/requirements.txt \
+    || echo "WARNING: could not install GroundstationAPI requirements (offline?)"

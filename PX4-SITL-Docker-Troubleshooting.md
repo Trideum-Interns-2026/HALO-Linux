@@ -1,111 +1,81 @@
-# PX4 SITL Docker Setup — Troubleshooting Guide provided by Claude
+# PX4 SITL Docker Setup — Troubleshooting Guide
 
-This covers the Docker-based PX4 SITL + Gazebo setup and the issues we hit
-getting it running, so the next person doesn't have to rediscover all of this.
+This covers the Docker-based PX4 SITL + Gazebo setup and how to diagnose the
+common failures.
 
 ## Prerequisites (one-time, on the host)
 
 - Docker Desktop running (WSL2 backend enabled)
-- WSLg available in the WSL2 distribution used to launch Docker
-- QGroundControl installed and open
+- WSLg available in the WSL2 distribution (Gazebo window)
+- QGroundControl installed. WSL2: UDP ground-station link on port 14550.
+  DGX Spark: TCP `127.0.0.1:5760` through the MAVLink TCP bridge (see `docs/spark/README.md`).
 
 ## The basic workflow
 
-From the folder containing `Dockerfile`, `docker-compose.yml`, and `entrypoint.sh`:
+Build the image from the repo root (where the `Dockerfile` and `docker-compose*.yml` files are):
 
 ```
 docker compose build
-docker compose run --rm px4-sitl
 ```
 
-First run clones PX4-Autopilot into a persistent Docker volume and builds it
-from scratch — this takes several minutes. Every run after that reuses the
-volume, so it launches quickly.
+Then, inside the dev container (VS Code: **Dev Containers: Rebuild and Reopen in Container**):
 
-To get a shell instead of launching the sim:
 ```
-docker compose run --rm px4-sitl bash
+fly                 # PX4 SITL + Gazebo; waits until /world/default/create exists
+HEADLESS=1 fly      # same, without the Gazebo window
+simlinks            # run next to fly: GPS bridge (/gps/fix) + uXRCE-DDS agent (/fmu/...)
 ```
 
-To launch a different vehicle model:
-```
-docker compose run --rm px4-sitl <target_name>
-```
+`fly` runs the vehicle model `PX4_SIM_MODEL=gz_x500_depth` (X500 + OakD-Lite).
+`fly` does not arm or take off.
+
+MAVSDK connects on `udpin://0.0.0.0:14540`. Ground-station MAVLink is on UDP 14550.
 
 ---
 
-## Issues we ran into, and the fixes
+## Common problems and fixes
 
-### "no configuration file provided: not found"
-You're not in the folder that contains `docker-compose.yml`. `cd` into it
-first. Also double check the file isn't accidentally saved as
-`docker-compose.yml.txt` (turn on file extensions in Windows Explorer to check).
+### Gazebo does not start, or `fly` waits forever
+`fly` waits until `/world/default/create` exists. The world name is usually
+`default`, but scripts find it dynamically through `Perception/scripts/gz_world.sh`.
+To list Gazebo image topics: `gz topic -l | grep image`.
+Check that `fly` is running in its own terminal and has not exited.
 
-### "failed to compute cache key ... entrypoint.sh not found"
-`entrypoint.sh` needs to sit in the same folder as the `Dockerfile`. Same
-`.txt` extension gotcha as above can cause this too.
+### No camera images (`/camera/front/image_raw` missing)
+The vehicle model must be `gz_x500_depth`. Plain `gz_x500` has no camera.
+Check with `ros2 topic list`. The color camera is 1920x1080 at 30 Hz (the model
+default). Do not cap it to 15 Hz.
 
-### "exec /usr/local/bin/entrypoint.sh: exec format error"
-Usually means `entrypoint.sh` is missing its `#!/bin/bash` shebang line on
-line 1, or has Windows-style CRLF line endings / a BOM. Our Dockerfile now
-strips CRLF/BOM automatically at build time, but the shebang line itself
-must be present in the file as saved.
+### `perceive` finds nothing, or the detector does not start
+The detector calls Triton (`HALO_TRITON_URL=triton:8001`), which is available
+only on the Spark profile (`.devcontainer/spark/`). The WSL2 profile has no Triton.
+Check `/perception/detection`: it publishes only when a person is seen.
 
-### CLI stuck printing "transferring context"
-The Docker build context was huge (a full PX4-Autopilot checkout with `.git`
-history). A `.dockerignore` fixes this by excluding files Docker doesn't
-need to see. (Note: once we switched to cloning PX4-Autopilot *inside* the
-container into a volume instead of copying a local folder in, this stopped
-being an issue entirely — no more huge local folder in the build context.)
+### QGroundControl shows no vehicle
+Confirm QGroundControl uses the link for your profile: UDP 14550 on WSL2, or
+TCP `127.0.0.1:5760` on the Spark through the MAVLink TCP bridge. MAVSDK
+(`udpin://0.0.0.0:14540`) is not a QGroundControl link.
 
-### "make: *** No rule to make target 'px4_sitl'. Stop."
-The PX4 Makefile only defines `px4_sitl` as a target if it finds
-`boards/px4/sitl/default.px4board` in the source tree — meaning the source
-was incomplete (bad/partial predownload, or missing submodules).
-**Fix:** use a genuinely fresh `git clone --recurse-submodules`.
+### Spark: cannot see your topics, or see another developer's sim
+Spark containers are fenced to localhost: `ROS_LOCALHOST_ONLY=1`,
+`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, `GZ_IP=127.0.0.1`. Never remove them.
+Check with `printenv | grep -E 'ROS_LOCALHOST|ROS_AUTOMATIC|GZ_IP'`.
 
-### "ERROR [init] param import failed" / "px4-param: not found" / "no autostart file found"
-This means the `build/` folder that got used was **stale or partially
-built** — usually inherited from a predownloaded copy of PX4-Autopilot that
-already had a `build/` folder in it from a previous, incomplete build.
-**Fix:** `rm -rf build` inside the container, then rebuild from scratch.
+### `movement` does nothing, or `tracking` / `geolocation` show no data
+`fly`, `tracking`, `geolocation` and `movement` do not arm or take off. `movement`
+needs an armed, airborne vehicle. Arm and take off in QGroundControl, or with
+`sitl_vehicle arm` and `sitl_vehicle takeoff [m]`. Movement returns PX4 to Hold
+on exit.
 
-### "ninja: error: unknown target '/bin/sh'" (or similar "unknown target" errors)
-This happened even after a clean `rm -rf build`. The actual fix was running
-a full **`make distclean`** instead — this is more thorough than deleting
-`build/`, because it also resets git submodule state (NuttX, the
-gazebo-classic sim submodule, etc.) that can get left in a broken state.
+### "ROS_LOCALHOST_ONLY is deprecated" at node startup
+Expected. Ignore it.
 
+### Something from an earlier run is still running
+Check with `simstack status`, then stop it with `simstack down`. `simstack` runs
+the whole stack and never arms the vehicle.
+
+### Image or dependencies look out of date
+Rebuild from the repo root on the WSL2 host:
 ```
-docker compose run --rm px4-sitl bash
-make distclean
-make px4_sitl gazebo-classic_typhoon_h480
-```
-
-If this keeps happening, it may be worth pinning PX4-Autopilot to a specific
-release tag that matches the base Docker image's era, rather than always
-building the bleeding-edge `main` branch against an older dev image.
-
-### QGroundControl shows "Disconnected" even though a UDP link shows "Connected"
-This is a networking issue, not a QGC settings issue. By default, PX4 SITL
-sends its MAVLink heartbeats to its own container's `127.0.0.1` — not to
-the Windows host — so under normal Docker bridge networking those packets
-never actually reach QGroundControl.
-**Fix:** enable Host Networking in Docker Desktop (Settings → Resources →
-Network) and set `network_mode: host` in `docker-compose.yml`. This makes
-the container share the host's network stack directly.
-
-### Volume / network "Resource is still in use"
-Something (usually a stopped container you forgot to `--rm`) is still
-attached. Run `docker ps -a`, find it, `docker rm -f <name>`, then retry
-`docker compose down -v`.
-
-### Want to start completely fresh?
-```
-docker compose down -v
 docker compose build --no-cache
-docker compose run --rm px4-sitl
 ```
-This wipes the persistent volume (source + build artifacts) and rebuilds
-everything from scratch. Only do this if something's genuinely broken —
-normal day-to-day use should never need it.

@@ -1,4 +1,4 @@
-# Logic tests for the sim helper scripts (scripts/sitl_vehicle, scripts/sim_check.py).
+# Logic tests for the sim helper scripts (scripts/sitl_vehicle, scripts/sim_check.py, scripts/sim_stack).
 # No sim, ROS or MAVLink needed.
 name: scripts-tests
 

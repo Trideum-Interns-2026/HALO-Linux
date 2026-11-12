@@ -15,10 +15,10 @@ interface and tests, and no one service is the template or the priority. The rul
 | Service | Owner | Job | Input | Output | Code today |
 | --- | --- | --- | --- | --- | --- |
 | Perception | Cohen | Find a person in camera images | camera image (ROS 2) | `perception_msgs/Detection`: header, confidence, bounding box in pixels | `Perception/`, `perception_msgs/` (done) |
-| Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | `geolocation_msgs/GeolocationState` (see "Position output format") | `Geolocation/`, `geolocation_msgs/` |
+| Geolocation | Brooks | Estimate the **drone's own** position | drone GPS (no perception data) | `geolocation_msgs/GeolocationState` (see "Position output format") | `Geolocation/`, `geolocation_msgs/` |
 | Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | `tracking_msgs/TrackingState`, same format as Geolocation | `Tracking/`, `tracking_msgs/` |
 | Movement | Lisa | Follow the person at a set distance, scan when lost | `tracking_msgs/TrackingState` (`/tracking/position`, person) + `geolocation_msgs/GeolocationState` (`/geolocation/position`, drone) + `camera_info` (ROS 2); drone heading from MAVSDK attitude (MAVLink) | vehicle motion only, sent over MAVLink as bounded offboard velocity commands (goto is still an open question) | `Movement/` (port of Lisa's `follow_person`), old `Src/move.cpp` waypoint test |
-| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | no code yet |
+| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | `GeolocationState` + `TrackingState` via a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | `UI/` (bridge node), `GroundstationAPI/` (FastAPI web API + dashboard) |
 
 Design decisions already made:
 - Every service output carries a timestamp (`std_msgs/Header`).
@@ -69,14 +69,15 @@ the owner before creating a package.
 | `Tracking/`, `tracking_msgs/` | Tracking service + interface package |
 | `CMakeLists.txt`, `package.xml` (root) | Build for the C++ code above (plain CMake, built by `scripts/*`, NOT colcon) |
 | `Perception/`, `perception_msgs/` | Perception service: node package + interface package |
+| `UI/`, `GroundstationAPI/` | UI service: `ui` bridge node (ROS to HTTP, Python) + FastAPI web endpoint and dashboard (plain pip, tested in `ui-tests.yml`) |
 | `Movement/` | Movement service (C++, ament_cmake): follow control math, MAVSDK adapter, node, tests |
-| `scripts/` | `fly` (start sim), `move`, `spark/verify.sh` |
+| `scripts/` | `fly` (start sim), `sim_links`, `sim_stack` (whole stack up/down), `sim_check`, `sitl_vehicle`, `halo_test` (all tests), `move`, `spark/verify.sh`, `tests/` |
 | `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
 | `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
 | `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
 | `Dockerfile`, `docker-compose*.yml` | Base image (`px4io/px4-sitl-gazebo-ros2`) and compose overrides (`.wsl`, `.spark`) |
 | `docs/spark/README.md` | Full Spark setup + QGroundControl over TCP |
-| `.github/workflows/` | CI (`scripts-tests.yml`, `perception-tests.yml`, `geolocation-tests.yml`, `tracking-tests.yml`, `movement-tests.yml`) |
+| `.github/workflows/` | CI (`scripts-tests.yml`, `perception-tests.yml`, `geolocation-tests.yml`, `tracking-tests.yml`, `movement-tests.yml`, `ui-tests.yml`) |
 
 ## Environments
 
@@ -93,13 +94,18 @@ Two dev container profiles. Code runs inside the container; the repo is mounted 
 Facts that cause bugs if forgotten:
 - Anything that calls Triton (today: perception) only runs on the Spark profile as of now.
 - `PX4_SIM_MODEL=gz_x500_depth` (X500 + OakD-Lite). Plain `gz_x500` has no camera.
-- The color camera is 1920x1080 at 15 Hz (the Dockerfile caps it from 30).
+- The color camera is 1920x1080 at 30 Hz (the model default; the Dockerfile no longer caps it to 15).
 - Spark containers are fenced to localhost (`ROS_LOCALHOST_ONLY=1`, `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, `GZ_IP=127.0.0.1`) so developers don't see each other's sims. NEVER remove these.
 - Gazebo world name is usually `default`; scripts find it dynamically via `Perception/scripts/gz_world.sh`.
 - The camera bridge launch (`Perception/launch/gz_harmonic_bridge.launch.py`) and the person spawner live in `Perception/` today but are shared sim tooling; any service can use them.
 - `ROS_LOCALHOST_ONLY is deprecated` warnings at node startup are expected; ignore them.
 
 ## Commands
+
+In an agent session only the `sim-operator` agent runs sim commands (`fly`, `simlinks`, service
+launches, `simstack`, `sim_check`, `sitl_vehicle`, `spawn_person`); the guard hook blocks everyone
+else. The main agent hands it a command from the approved list in `.claude/agents/sim-operator.md`.
+Humans run them directly.
 
 ```bash
 fly                       # terminal 1: PX4 SITL + Gazebo (waits until /world/default/create exists)
@@ -112,6 +118,10 @@ sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # SITL only; hum
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
 tracking                  # tracking service (ros2 launch tracking tracking.launch.py)
 geolocation               # geolocation service (ros2 launch geolocation geolocation.launch.py)
+ui                        # UI bridge node (ros2 launch ui ui.launch.py)
+groundstation             # web API + dashboard on http://127.0.0.1:8000 (port 8000 is forwarded by both dev containers)
+simstack up [--gui]       # whole sim stack in one command, left running; never arms. simstack status | down
+halo_test [scripts|perception|ui|web|ros]   # run every test suite, one PASS/FAIL line each
 ./scripts/move <n_m> <e_m>   # short waypoint test, |offset| <= 2 m, vehicle must already be airborne
 
 # ROS 2 packages (build workspace is /opt/ros2_ws, packages symlinked from /workspace)
@@ -140,7 +150,7 @@ gz topic -l | grep image
 
 ```
 camera (sim/HW) ──ROS 2──> Perception ──Detection──────────────┐
-drone GPS + perception ──> Geolocation ──drone LLA + error──┬──> Tracking ──person LLA + error──┬──> Movement ──MAVLink offboard velocity──> vehicle
+drone GPS ───────────────> Geolocation ──drone LLA + error──┬──> Tracking ──person LLA + error──┬──> Movement ──MAVLink offboard velocity──> vehicle
                                                              │                                   └──> UI bridge node ──HTTP──> website
                                                              ├──────────────────────────────────────> UI bridge node
                                                              └──────────────────────────────────────> Movement
@@ -157,19 +167,12 @@ Interfaces that exist today:
 
 | Topic | Type | Publisher | Notes |
 | --- | --- | --- | --- |
-| `/camera/front/image_raw` | `sensor_msgs/Image` | camera bridge (sim) | 1920x1080, 15 Hz in sim |
+| `/camera/front/image_raw` | `sensor_msgs/Image` | camera bridge (sim) | 1920x1080, 30 Hz in sim |
 | `/camera/front/camera_info` | `sensor_msgs/CameraInfo` | camera bridge (sim) | intrinsics |
 | `/perception/detection` | `perception_msgs/Detection` | Perception | header, confidence, x_min/y_min/x_max/y_max in pixels; only when a target is seen |
 | `/geolocation/position` | `geolocation_msgs/GeolocationState` | Geolocation | drone LLA + ECEF 3-sigma error |
 | `/tracking/position` | `tracking_msgs/TrackingState` | Tracking | person LLA + ECEF 3-sigma error |
-
-## Known broken or stale
-
-The perception interface changed: the old package published `geometry_msgs/PointStamped` on
-`/<detector>/<target>/position` and `std_msgs/Float32` on `.../distance`; the new one publishes
-`Detection` on `/perception/detection`. Nothing in the repo consumes the old interface any more.
-
-- `Detection` has no distance, by design: ranging belongs inside Tracking (e.g. pinhole `height_m * fy / box_height_px` from `camera_info`, test person 1.9 m, with height spread folded into the error).
+| HTTP `POST /api/telemetry` (not ROS) | JSON, `Telemetry` model in `GroundstationAPI/main.py` | `ui` bridge | drone LLA, person LLA when tracked; 2 Hz; read back by the dashboard from `GET /api/telemetry/latest` |
 
 ## Microservice rules (every service)
 
@@ -249,7 +252,7 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
 - Sim-only helpers (spawn scripts, Gazebo bridges, `gz` calls, `/world/...` services) stay in
   `scripts/`, launch files, or a package's `scripts/`. NEVER call them from any service's node code.
 - Read camera size and intrinsics from `camera_info` / the image itself, not from constants matching
-  the Gazebo camera (1920x1080, 15 Hz).
+  the Gazebo camera (1920x1080, 30 Hz).
 - Use the message header stamp (or ROS time) for timing, never wall-clock assumptions about sim speed.
 - Every motion command MUST be bounded: speed, yaw rate, offset, and follow-distance limits as named
   constants or parameters, enforced in code.
@@ -270,7 +273,7 @@ HITL and on real hardware. Write it so that switch is a configuration change, no
 
 - [ ] Builds: colcon for ROS packages, cmake for `Src/`
 - [ ] Tests pass for every touched service
-- [ ] Consumers of any changed topic or message are updated (see "Known broken or stale")
+- [ ] Consumers of any changed topic or message are updated
 - [ ] Aliases, scripts, launch files and READMEs that reference renamed or deleted files are updated
 - [ ] No debug logs, hardcoded values, or unused generated files left behind
 - [ ] Nothing new is hardcoded to SITL (endpoints, world names, camera size); motion stays bounded and fails safe
@@ -282,9 +285,6 @@ Ask the owner before deciding any of these in code.
 General
 - Should the WSL profile get `tritonclient` and a Triton endpoint, or are model-using services Spark-only?
 - Exact package and topic names for Geolocation, Tracking, Movement and UI (pattern above).
-
-Geolocation and Tracking (Brooks)
-- How perception data feeds the drone's own position estimate in Geolocation.
 
 Movement (Lisa)
 - Datatype for movement commands (current idea: "functions").

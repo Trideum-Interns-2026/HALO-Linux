@@ -5,8 +5,7 @@ With bridge networking the sim's MAVLink never leaves the dev container,
 and a VS Code / SSH port forward carries TCP only. So this bridge:
 
   * owns UDP 127.0.0.1:14550, where PX4 SITL sends its GCS stream (from
-    port 18570, see /opt/px4-gazebo/etc/init.d-posix/px4-rc.mavlink), and
-    where `track` sends its ROI messages for QGC;
+    port 18570, see /opt/px4-gazebo/etc/init.d-posix/px4-rc.mavlink);
   * serves a TCP stream on MAVLINK_TCP_PORT (default 5760) that VS Code
     forwards to the laptop. QGC: Comm Links -> TCP -> 127.0.0.1:5760.
 

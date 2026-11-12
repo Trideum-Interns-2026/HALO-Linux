@@ -27,10 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# MAVSDK C++ SDK — installed as a prebuilt .deb so the Movement/
-# Tracking_Geolocation C++ test programs (run_all.py) can be built and run
-# directly inside this container via CMake. This base image is Ubuntu 24.04
-# (Noble), not the 20.04 (Focal) the old Dockerfile targeted.
+# MAVSDK C++ SDK — installed as a prebuilt .deb so Movement/ and Src/move.cpp can be built
+# inside this container via CMake. This base image is Ubuntu 24.04 (Noble).
 #
 # TARGETARCH is set automatically by buildx (the default builder since
 # Docker Engine 23 / current Docker Compose) to whatever arch is actually
@@ -79,11 +77,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     && python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # The OakD-Lite color camera (IMX214) renders 1920x1080 at 30 Hz, which is
-# ~180 MB/s through the ROS bridge — more than the detectors can use, and a
-# big part of the camera pipeline's lag. 15 Hz is plenty for tracking a
-# person. Only the first <update_rate> in the model is the IMX214; the depth
-# camera after it is left alone.
-RUN sed -i '0,/<update_rate>30<\/update_rate>/s//<update_rate>15<\/update_rate>/' \
-        /opt/px4-gazebo/share/gz/models/OakD-Lite/model.sdf
+# ~180 MB/s through the ROS bridge. 30 Hz is the tracking target (a running person moves
+# ~15 cm per frame at 30 Hz, ~30 cm at 15 Hz), so the model's own <update_rate> is left
+# alone. An earlier build capped it to 15 Hz here with sed; to go back, add that sed again.
 
 WORKDIR /workspace
