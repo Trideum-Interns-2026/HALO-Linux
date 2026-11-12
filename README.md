@@ -16,7 +16,7 @@ The system is split into microservices, each with its own owner, interface and t
 | Geolocation | Estimate the drone's own position | [`Geolocation/`](Geolocation/README.md), [`geolocation_msgs/`](geolocation_msgs/) |
 | Tracking | Estimate the person's position | [`Tracking/`](Tracking/README.md), [`tracking_msgs/`](tracking_msgs/) |
 | Movement | Follow the person, commanded over MAVLink | [`Movement/`](Movement/README.md) (ported from Lisa's follow_person); older `Src/move.cpp` |
-| UI/UX | Web view of the drone's data through a ROS bridge node | Not started |
+| UI/UX | Web view of the drone's data through a ROS bridge node | [`UI/`](UI/README.md) (bridge node), [`GroundstationAPI/`](GroundstationAPI/README.md) (web API + dashboard) |
 
 ## Prerequisites
 

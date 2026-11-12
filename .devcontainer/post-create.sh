@@ -14,9 +14,10 @@ ln -sfn /workspace/Geolocation /opt/ros2_ws/src/Geolocation
 ln -sfn /workspace/tracking_msgs /opt/ros2_ws/src/tracking_msgs
 ln -sfn /workspace/Tracking /opt/ros2_ws/src/Tracking
 ln -sfn /workspace/Movement /opt/ros2_ws/src/Movement
+ln -sfn /workspace/UI /opt/ros2_ws/src/UI
 (cd /opt/ros2_ws && colcon build \
     --packages-select perception_msgs perception geolocation_msgs geolocation \
-        tracking_msgs tracking movement \
+        tracking_msgs tracking movement ui \
     --symlink-install)
 
 ln -sfn /workspace/Tracking/scripts/tracking /usr/local/bin/tracking
@@ -76,6 +77,8 @@ sed -i '/^alias tracking=/d' /etc/bash.bashrc
 sed -i '/^alias geolocation=/d' /etc/bash.bashrc
 echo "alias tracking='ros2 launch tracking tracking.launch.py'" >> /etc/bash.bashrc
 echo "alias geolocation='ros2 launch geolocation geolocation.launch.py'" >> /etc/bash.bashrc
+sed -i '/^alias ui=/d' /etc/bash.bashrc
+echo "alias ui='ros2 launch ui ui.launch.py'" >> /etc/bash.bashrc
 # `movement` = the movement service (follows the person over MAVLink offboard velocity)
 sed -i '/^alias movement=/d' /etc/bash.bashrc
 echo "alias movement='ros2 launch movement movement.launch.py'" >> /etc/bash.bashrc

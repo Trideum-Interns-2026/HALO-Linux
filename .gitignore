@@ -38,3 +38,7 @@ infra/triton/model_repository/*/[0-9]*/
 *.engine
 .env
 
+
+# Python virtualenvs (never commit)
+venv/
+.venv/

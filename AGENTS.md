@@ -18,7 +18,7 @@ interface and tests, and no one service is the template or the priority. The rul
 | Geolocation | Brooks | Estimate the **drone's own** position | drone GPS + perception data | `geolocation_msgs/GeolocationState` (see "Position output format") | `Geolocation/`, `geolocation_msgs/` |
 | Tracking (POI = person of interest) | Brooks | Estimate the **person's** position in the world | `Detection` (box + confidence), plus the drone's position | `tracking_msgs/TrackingState`, same format as Geolocation | `Tracking/`, `tracking_msgs/` |
 | Movement | Lisa | Follow the person at a set distance, scan when lost | `tracking_msgs/TrackingState` (`/tracking/position`, person) + `geolocation_msgs/GeolocationState` (`/geolocation/position`, drone) + `camera_info` (ROS 2); drone heading from MAVSDK attitude (MAVLink) | vehicle motion only, sent over MAVLink as bounded offboard velocity commands (goto is still an open question) | `Movement/` (port of Lisa's `follow_person`), old `Src/move.cpp` waypoint test |
-| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | data from a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | no code yet |
+| UI/UX (web endpoint) | Kean | Show the operator the drone's data in a website on any device | `GeolocationState` + `TrackingState` via a ROS-side bridge node | HTTP to a website; QGroundControl socket; optional drone health | `UI/` (bridge node), `GroundstationAPI/` (FastAPI web API + dashboard) |
 
 Design decisions already made:
 - Every service output carries a timestamp (`std_msgs/Header`).
@@ -69,6 +69,7 @@ the owner before creating a package.
 | `Tracking/`, `tracking_msgs/` | Tracking service + interface package |
 | `CMakeLists.txt`, `package.xml` (root) | Build for the C++ code above (plain CMake, built by `scripts/*`, NOT colcon) |
 | `Perception/`, `perception_msgs/` | Perception service: node package + interface package |
+| `UI/`, `GroundstationAPI/` | UI service: `ui` bridge node (ROS to HTTP, Python) + FastAPI web endpoint and dashboard (plain pip, tested in `ui-tests.yml`) |
 | `Movement/` | Movement service (C++, ament_cmake): follow control math, MAVSDK adapter, node, tests |
 | `scripts/` | `fly` (start sim), `move`, `spark/verify.sh` |
 | `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
@@ -76,7 +77,7 @@ the owner before creating a package.
 | `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
 | `Dockerfile`, `docker-compose*.yml` | Base image (`px4io/px4-sitl-gazebo-ros2`) and compose overrides (`.wsl`, `.spark`) |
 | `docs/spark/README.md` | Full Spark setup + QGroundControl over TCP |
-| `.github/workflows/` | CI (`scripts-tests.yml`, `perception-tests.yml`, `geolocation-tests.yml`, `tracking-tests.yml`, `movement-tests.yml`) |
+| `.github/workflows/` | CI (`scripts-tests.yml`, `perception-tests.yml`, `geolocation-tests.yml`, `tracking-tests.yml`, `movement-tests.yml`, `ui-tests.yml`) |
 
 ## Environments
 
@@ -112,6 +113,7 @@ sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # SITL only; hum
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
 tracking                  # tracking service (ros2 launch tracking tracking.launch.py)
 geolocation               # geolocation service (ros2 launch geolocation geolocation.launch.py)
+ui                        # UI bridge node (ros2 launch ui ui.launch.py); web API: cd GroundstationAPI && uvicorn main:app
 ./scripts/move <n_m> <e_m>   # short waypoint test, |offset| <= 2 m, vehicle must already be airborne
 
 # ROS 2 packages (build workspace is /opt/ros2_ws, packages symlinked from /workspace)
