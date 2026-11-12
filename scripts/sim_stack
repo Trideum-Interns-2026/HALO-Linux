@@ -15,17 +15,32 @@ STATE_DIR="${HALO_STACK_DIR:-/tmp/halo-stack}"
 REPO="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
 WORLD_WAIT_S="${HALO_WORLD_WAIT_S:-120}"
 LEFTOVER='bin/px4|gz sim|MicroXRCE|parameter_bridge|ros2 launch|yolo_person|detection_overlay|debug_view|tracking_node|geolocation_node|ui_bridge'
+# In the command line of every group leader start() creates; tells our processes from a reused pid.
+MARKER='tail -f /dev/null | exec'
 
 source /opt/ros/jazzy/setup.bash
 [[ -f /opt/px4_ros2/install/setup.bash ]] && source /opt/px4_ros2/install/setup.bash
 [[ -f /opt/ros2_ws/install/setup.bash ]] && source /opt/ros2_ws/install/setup.bash
 set -u   # after the ROS setup files, which are not nounset-safe
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
-running() {  # running <name>: the group leader recorded in the pid file is alive
+ours() {  # ours <pid>: alive AND one of our group leaders (a pid file can outlive its process)
+    [[ "$1" =~ ^[0-9]+$ && -r "/proc/$1/cmdline" ]] \
+        && tr '\0' ' ' < "/proc/$1/cmdline" | grep -qF "$MARKER"
+}
+
+running() {  # running <name>
     local f="$STATE_DIR/$1.pid"
-    [[ -f "$f" ]] && kill -0 "$(cat "$f")" 2>/dev/null
+    [[ -f "$f" ]] && ours "$(cat "$f")"
+}
+
+leftovers() {  # pids matching LEFTOVER, minus this process and its ancestors (the caller's shell)
+    local keep=" " p=$$ q
+    while [[ -n "$p" && "$p" != 0 && "$p" != 1 ]]; do
+        keep+="$p "; p="$(ps -o ppid= -p "$p" 2> /dev/null | tr -d ' ')"
+    done
+    pgrep -f "$LEFTOVER" | while read -r q; do [[ "$keep" == *" $q "* ]] || echo "$q"; done
 }
 
 start() {  # start <name> <command...>: own session, logged, pid recorded
@@ -37,13 +52,14 @@ start() {  # start <name> <command...>: own session, logged, pid recorded
 }
 
 cmd_up() {
-    local gui=0
+    local gui=0 a left waited=0
     for a in "$@"; do
         case "$a" in --gui) gui=1 ;; *) usage ;; esac
     done
-    if pgrep -f "$LEFTOVER" > /dev/null; then
+    left="$(leftovers)"
+    if [[ -n "$left" ]]; then
         echo "something from a previous run is still up; run 'sim_stack down' first. Matched:" >&2
-        pgrep -af "$LEFTOVER" | cut -c1-120 >&2
+        ps -o pid=,args= -p $left | cut -c1-120 >&2
         exit 1
     fi
     mkdir -p "$STATE_DIR"
@@ -55,7 +71,6 @@ cmd_up() {
         HEADLESS=1 start fly "$REPO/scripts/fly"
     fi
 
-    local waited=0
     until gz service -l 2> /dev/null | grep -q '/create$'; do
         sleep 2; waited=$((waited + 2))
         if (( waited >= WORLD_WAIT_S )); then
@@ -68,16 +83,18 @@ cmd_up() {
     start sim_links "$REPO/scripts/sim_links"
     sleep 5
     start perception ros2 launch perception perception.launch.py overlay:=true
-    start geolocation ros2 launch geolocation geolocation.launch.py use_sim_time:=true
+    start geolocation ros2 launch geolocation geolocation.launch.py
     start tracking ros2 launch tracking tracking.launch.py use_sim_time:=true
     start ui ros2 launch ui ui.launch.py use_sim_time:=true
     sleep 15
     "$REPO/Perception/scripts/spawn_person.sh" 5 0 0 > "$STATE_DIR/spawn_person.log" 2>&1 \
-        && echo "person spawned 5 m ahead" || echo "spawn_person failed, see $STATE_DIR/spawn_person.log"
+        && echo "person spawned 5 m ahead" \
+        || echo "spawn_person failed, see $STATE_DIR/spawn_person.log"
     if (( gui )); then
         start debug_view vglrun -d egl ros2 run perception debug_view
     fi
-    echo "up. Stop with: sim_stack down. Logs: $STATE_DIR/*.log"
+    echo "up. /tracking/position appears about 30 s after this. Stop with: sim_stack down."
+    echo "Logs: $STATE_DIR/*.log"
 }
 
 cmd_status() {
@@ -90,25 +107,21 @@ cmd_status() {
 }
 
 cmd_down() {
-    local n pid
+    local n pid left
     for n in debug_view ui tracking geolocation perception sim_links fly; do
         [[ -f "$STATE_DIR/$n.pid" ]] || continue
         pid="$(cat "$STATE_DIR/$n.pid")"
-        kill -TERM -- "-$pid" 2> /dev/null || true
+        # Only signal the group if the pid is still ours: after a restart it may be someone else's.
+        ! ours "$pid" || kill -TERM -- "-$pid" 2> /dev/null || true
         rm -f "$STATE_DIR/$n.pid"
     done
     sleep 5
     # Anything that outlived its launcher (a launcher can exit before the node under it).
-    # Never kill ourselves or the shell that called us: skip every ancestor of this process.
-    local keep=" " p=$$ left
-    while [[ -n "$p" && "$p" != 0 && "$p" != 1 ]]; do
-        keep+="$p "; p="$(ps -o ppid= -p "$p" 2> /dev/null | tr -d ' ')"
-    done
-    left="$(pgrep -f "$LEFTOVER" | while read -r q; do [[ "$keep" == *" $q "* ]] || echo "$q"; done)"
+    left="$(leftovers)"
     [[ -z "$left" ]] || kill -TERM $left 2> /dev/null
     sleep 3
     ros2 daemon stop > /dev/null 2>&1   # the CLI daemon that ros2 commands against the stack start
-    left="$(pgrep -f "$LEFTOVER" | while read -r q; do [[ "$keep" == *" $q "* ]] || echo "$q"; done)"
+    left="$(leftovers)"
     if [[ -n "$left" ]]; then
         echo "WARNING: processes left: $left" >&2; exit 1
     fi

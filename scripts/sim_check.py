@@ -41,7 +41,10 @@ CAMERA_RATE_WINDOW_S = 10.0
 CAMERA_RATE_PASS_HZ = 12.0
 CAMERA_RATE_WARN_HZ = 5.0
 TAKEOFF_ALT_M = 1.5       # low enough that a person 6 m away is not cut off at the bottom of the image
-TAKEOFF_SETTLE_S = 10.0
+# Wall-clock limit for reaching TAKEOFF_MIN_ALT_M. PX4 spools up and ramps the climb for a few
+# seconds, and a loaded machine runs the sim slower than real time, so 10 s was too tight (the
+# vehicle was at 1.0 m and still climbing). The wait ends as soon as the height is reached.
+TAKEOFF_SETTLE_S = 40.0
 LINK_TIMEOUT_S = 40.0
 ARM_TIMEOUT_S = 30.0
 TAKEOFF_MIN_ALT_M = 1.2

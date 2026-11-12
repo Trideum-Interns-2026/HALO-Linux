@@ -27,7 +27,7 @@ Tracking has no fresh position. Error bounds are not forwarded yet.
 | `tracking_topic` | `/tracking/position` | Person position input |
 | `api_url` | `http://127.0.0.1:8000/api/telemetry` | Web API endpoint (launch arg `api_url:=`) |
 | `post_rate_hz` | `2.0` | How often the latest positions are posted |
-| `maximum_input_age_s` | `2.0` | Older inputs are dropped (compared with the node clock) |
+| `maximum_input_age_s` | `2.0` | Inputs received longer ago than this are dropped |
 | `http_timeout_s` | `1.0` | Per-request timeout; the POST runs off the ROS thread |
 
 If the web API is down the node logs a throttled warning and keeps running.
@@ -37,7 +37,6 @@ If the web API is down the node logs a throttled warning and keeps running.
 ```bash
 groundstation                                   # terminal 1: web API and dashboard on 127.0.0.1:8000
 ui                                              # terminal 2 (alias for ros2 launch ui ui.launch.py)
-# in the sim add use_sim_time:=true, as for tracking
 
 cd /opt/ros2_ws && colcon build --packages-select geolocation_msgs tracking_msgs ui --symlink-install
 python3 -m pytest UI/test/ -v                   # from the repo root, workspace sourced

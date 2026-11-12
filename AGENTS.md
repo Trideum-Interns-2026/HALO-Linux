@@ -172,6 +172,7 @@ Interfaces that exist today:
 | `/perception/detection` | `perception_msgs/Detection` | Perception | header, confidence, x_min/y_min/x_max/y_max in pixels; only when a target is seen |
 | `/geolocation/position` | `geolocation_msgs/GeolocationState` | Geolocation | drone LLA + ECEF 3-sigma error |
 | `/tracking/position` | `tracking_msgs/TrackingState` | Tracking | person LLA + ECEF 3-sigma error |
+| HTTP `POST /api/telemetry` (not ROS) | JSON, `Telemetry` model in `GroundstationAPI/main.py` | `ui` bridge | drone LLA, person LLA when tracked; 2 Hz; read back by the dashboard from `GET /api/telemetry/latest` |
 
 ## Microservice rules (every service)
 

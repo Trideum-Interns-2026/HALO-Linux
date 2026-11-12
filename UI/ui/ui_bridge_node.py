@@ -16,10 +16,7 @@ from ui.telemetry_mapper import build_telemetry, is_fresh
 
 DEFAULT_API_URL = "http://127.0.0.1:8000/api/telemetry"
 LOG_THROTTLE_S = 5.0
-
-
-def stamp_to_seconds(stamp) -> float:
-    return stamp.sec + stamp.nanosec * 1e-9
+SHUTDOWN_MARGIN_S = 0.5
 
 
 class UiBridgeNode(Node):
@@ -35,12 +32,15 @@ class UiBridgeNode(Node):
         self._timeout_s = float(self.declare_parameter("http_timeout_s", 1.0).value)
 
         self._poster = poster or HttpPoster(self._api_url, self._timeout_s)
-        self._drone = None   # (stamp_s, (lat, lon, alt))
+        # (received_s, (lat, lon, alt)). Age is counted from when the message arrived on this
+        # node's clock, as Movement and Tracking do, so it works with or without use_sim_time.
+        self._drone = None
         self._person = None
         self._lock = threading.Lock()
         self._in_flight = False
+        self._worker = None
 
-        # Sensor-style inputs from the other services: they publish reliable, so match.
+        # Inputs are other services' outputs (reliable, depth 10), not sensors: match that QoS.
         self.create_subscription(GeolocationState, self._drone_topic, self._on_drone, 10)
         self.create_subscription(TrackingState, self._person_topic, self._on_person, 10)
         self._timer = self.create_timer(1.0 / max(self._post_rate_hz, 1e-3), self._on_timer)
@@ -49,12 +49,13 @@ class UiBridgeNode(Node):
             f"at {self._post_rate_hz} Hz, max input age {self._max_age_s} s")
 
     def _on_drone(self, msg: GeolocationState) -> None:
-        self._drone = (stamp_to_seconds(msg.header.stamp),
-                       (msg.latitude_deg, msg.longitude_deg, msg.altitude_m))
+        self._drone = (self._now_s(), (msg.latitude_deg, msg.longitude_deg, msg.altitude_m))
 
     def _on_person(self, msg: TrackingState) -> None:
-        self._person = (stamp_to_seconds(msg.header.stamp),
-                        (msg.latitude_deg, msg.longitude_deg, msg.altitude_m))
+        self._person = (self._now_s(), (msg.latitude_deg, msg.longitude_deg, msg.altitude_m))
+
+    def _now_s(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
 
     def _fresh_position(self, entry, now_s: float):
         if entry is None or not is_fresh(entry[0], now_s, self._max_age_s):
@@ -62,7 +63,7 @@ class UiBridgeNode(Node):
         return entry[1]
 
     def build_payload(self) -> Optional[dict]:
-        now_s = self.get_clock().now().nanoseconds * 1e-9
+        now_s = self._now_s()
         return build_telemetry(self._fresh_position(self._drone, now_s),
                                self._fresh_position(self._person, now_s))
 
@@ -74,7 +75,8 @@ class UiBridgeNode(Node):
             if self._in_flight:
                 return  # previous POST still running; never block or queue up
             self._in_flight = True
-        threading.Thread(target=self._send, args=(payload,), daemon=True).start()
+        self._worker = threading.Thread(target=self._send, args=(payload,), daemon=True)
+        self._worker.start()
 
     def _send(self, payload: dict) -> None:
         try:
@@ -88,7 +90,10 @@ class UiBridgeNode(Node):
                 self._in_flight = False
 
     def shutdown(self) -> None:
+        """Stop posting and wait for a POST in flight, so it cannot log on a destroyed node."""
         self._timer.cancel()
+        if self._worker is not None:
+            self._worker.join(timeout=self._timeout_s + SHUTDOWN_MARGIN_S)
 
 
 def main(args=None):
