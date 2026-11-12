@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cat-and-mouse city at the mesh's native size (3x the stock one, which JdeRobot shrinks to 0.33): 500 m wide, trees about 30 m, mountains up to 78 m
+     Built from two sources: PX4's default world supplies the physics, gravity, magnetic field and
+     GPS origin (so SITL works), and JdeRobot's RoboticsInfrastructure (humble-devel, scene
+     drone_cat_mouse_city.world) supplies the look (sky, lights, ground plane) and the my_city_v3 model. Use the scene's
+     own ground and sky: the city only reads as a city against them (the black roads ARE the
+     black ground). Meshes are found through GZ_SIM_RESOURCE_PATH, see Worlds/city/README.md.
+     The world name must equal this file's name: PX4 loads $PX4_GZ_WORLDS/$PX4_GZ_WORLD.sdf and
+     talks to /world/<name>/... -->
+<sdf version="1.9">
+  <world name="city_cat_mouse_full">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic" />
+    <scene>
+      <ambient>0.6 0.6 0.7 1</ambient>
+      <background>0.5 0.7 0.9 1</background>
+      <shadows>true</shadows>
+    </scene>
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 100 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.5 0.3 -1.0</direction>
+    </light>
+    <model name="ground_plane">
+      <static>true</static>
+      <pose>0 0 -0.05 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1500 1500</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1500 1500</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.12 0.42 0.08 1</ambient>
+            <diffuse>0.12 0.42 0.08 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg> 8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+    <model name="my_city_v3">
+      <static>true</static>
+      <link name="city_link">
+        <pose>0 0 0 1.5707963 0 0</pose>
+        <visual name="city_visual">
+          <geometry>
+            <mesh>
+              <uri>model://my_city_v3/meshes/city.glb</uri>
+              <scale>1 1 1</scale>
+            </mesh>
+          </geometry>
+        </visual>
+        <collision name="city_collision">
+          <geometry>
+            <mesh>
+              <uri>model://my_city_v3/meshes/city.glb</uri>
+              <scale>1 1 1</scale>
+            </mesh>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+  </world>
+</sdf>

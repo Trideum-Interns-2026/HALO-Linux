@@ -8,7 +8,8 @@ origin) plus one city model.
 | World file | City model | Notes |
 | --- | --- | --- |
 | `city_basic.sdf` | `large_basic_city` | 500 m x 500 m, low buildings up to about 4 m, 2 MB |
-| `city_cat_mouse.sdf` | `my_city_v3` | Blender export from the drone cat-and-mouse scene, 7 MB |
+| `city_cat_mouse.sdf` | `my_city_v3` | Blender export from the drone cat-and-mouse scene, 7 MB; the stock model draws it at 0.33 of its mesh size (165 m across) |
+| `city_cat_mouse_full.sdf` | `my_city_v3`, inlined | the same city at the mesh's native size, 3x bigger (500 m across, trees about 30 m, mountains up to 78 m), ground plane 1500 m |
 
 The world name equals the file name: PX4 loads `$PX4_GZ_WORLDS/$PX4_GZ_WORLD.sdf` and talks to
 `/world/<name>/...`. The drone spawns at the world origin on the ground plane; the buildings sit on
@@ -43,6 +44,16 @@ Pick the world with `PX4_GZ_WORLD`; everything else is the usual stack:
 PX4_GZ_WORLD=city_basic fly                  # PX4 SITL + Gazebo in the basic city
 PX4_GZ_WORLD=city_basic simstack up --gui    # the whole stack, left running
 PX4_GZ_WORLD=city_cat_mouse fly              # the other city
+PX4_GZ_WORLD=city_cat_mouse_full fly         # the other city at 3x the size
 ```
 
 (`gz sim -r Worlds/city/city_basic.sdf` alone starts only Gazebo, without PX4 or the drone.)
+
+## Scale
+
+The drone is a real X500 (0.5 m across) and the person is 1.9 m tall, and Perception, Tracking and
+Movement are tuned for that, so size the *city* up, not the drone down. A model include cannot
+rescale a model, so `city_cat_mouse_full.sdf` inlines the city with its own `<scale>`: change the
+three numbers in its `<mesh>` blocks (visual and collision must match) to any size, and keep the
+ground plane larger than the mesh (the mesh is 500 m across at scale 1). The worlds are plain
+files here: PX4 only loads the link in its world folder.

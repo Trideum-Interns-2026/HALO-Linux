@@ -7,12 +7,15 @@ import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WORLDS = sorted(glob.glob(os.path.join(REPO, "Worlds", "city", "*.sdf")))
-MODELS = {"city_basic": "large_basic_city", "city_cat_mouse": "my_city_v3"}
+MODELS = {"city_basic": "large_basic_city", "city_cat_mouse": "my_city_v3",
+          "city_cat_mouse_full": "my_city_v3"}
+INLINE_SCALE = {"city_cat_mouse_full": 1.0}      # inlined at this mesh scale (stock is 0.33)
 ASSETS = os.path.join(REPO, "external", "RoboticsInfrastructure", "CustomRobots")
 
 
 def test_both_city_worlds_exist():
-    assert [os.path.basename(w) for w in WORLDS] == ["city_basic.sdf", "city_cat_mouse.sdf"]
+    assert [os.path.basename(w) for w in WORLDS] == [
+        "city_basic.sdf", "city_cat_mouse.sdf", "city_cat_mouse_full.sdf"]
 
 
 @pytest.mark.parametrize("path", WORLDS, ids=os.path.basename)
@@ -24,8 +27,16 @@ def test_world_is_a_complete_px4_world(path):
         assert world.find(tag) is not None, tag
     ground = [m for m in world.findall("model") if m.get("name") == "ground_plane"]
     assert len(ground) == 1 and ground[0].find(".//collision") is not None
-    includes = world.findall("include/uri")
-    assert [i.text for i in includes] == ["model://%s" % MODELS[name]]
+    includes = [i.text for i in world.findall("include/uri")]
+    if name in INLINE_SCALE:                # an include cannot rescale a model: it is inlined
+        assert includes == []
+        meshes = world.findall("model[@name='%s']//mesh" % MODELS[name])
+        assert len(meshes) == 2                                     # visual and collision
+        for mesh in meshes:
+            assert mesh.find("uri").text == "model://%s/meshes/city.glb" % MODELS[name]
+            assert _floats(mesh.find("scale").text) == [INLINE_SCALE[name]] * 3
+    else:
+        assert includes == ["model://%s" % MODELS[name]]
 
 
 @pytest.mark.parametrize("path", WORLDS, ids=os.path.basename)
@@ -66,10 +77,19 @@ def _floats(text):
     return [float(v) for v in text.split()]
 
 
+def test_full_size_city_has_a_ground_plane_that_covers_it():
+    world = ET.parse(
+        os.path.join(REPO, "Worlds", "city", "city_cat_mouse_full.sdf")).getroot().find("world")
+    ground = [m for m in world.findall("model") if m.get("name") == "ground_plane"][0]
+    sizes = [_floats(sz.text) for sz in ground.iter("size")]
+    assert sizes and all(min(sz) >= 1000 for sz in sizes)           # the mesh spans 500 m
+
+
 def test_basic_city_keeps_its_dark_look():
     # the roads are black by design (Color.png is pure black), so the ground and sky must be dark
     # too: on PX4's light gray the city washes out into a flat plane with black walls
-    world = ET.parse(os.path.join(REPO, "Worlds", "city", "city_basic.sdf")).getroot().find("world")
+    world = ET.parse(
+        os.path.join(REPO, "Worlds", "city", "city_basic.sdf")).getroot().find("world")
     ground = [m for m in world.findall("model") if m.get("name") == "ground_plane"][0]
     assert max(_floats(ground.find(".//visual//diffuse").text)[:3]) < 0.1
     assert max(_floats(world.find("scene/background").text)) < 0.1
