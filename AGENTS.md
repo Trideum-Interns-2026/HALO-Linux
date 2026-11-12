@@ -74,6 +74,7 @@ the owner before creating a package.
 | `scripts/` | `fly` (start sim), `sim_links`, `sim_stack` (whole stack up/down), `sim_check`, `sitl_vehicle`, `halo_test` (all tests), `move`, `spark/verify.sh`, `tests/` |
 | `infra/triton/` | Shared Triton Inference Server: compose file, `build_engine.sh`, `model_repository/yolo_person/config.pbtxt` |
 | `Worlds/huntsville/` | Custom Gazebo world (downtown Huntsville) |
+| `Worlds/city/`, `external/` | PX4-ready city worlds (`city_basic`, `city_cat_mouse`) built on JdeRobot's city models; the models are cloned into the git-ignored `external/` (see `Worlds/city/README.md`) |
 | `.devcontainer/` | Dev container profiles: default (WSL2) and `spark/` (DGX Spark) + `post-create.sh` |
 | `Dockerfile`, `docker-compose*.yml` | Base image (`px4io/px4-sitl-gazebo-ros2`) and compose overrides (`.wsl`, `.spark`) |
 | `docs/spark/README.md` | Full Spark setup + QGroundControl over TCP |

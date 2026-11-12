@@ -42,3 +42,6 @@ infra/triton/model_repository/*/[0-9]*/
 # Python virtualenvs (never commit)
 venv/
 .venv/
+
+# Third-party checkouts (city world assets), never commit
+external/

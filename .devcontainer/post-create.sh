@@ -88,3 +88,13 @@ echo "alias halo_test='/workspace/scripts/halo_test'" >> /etc/bash.bashrc
 # Web API dependencies (FastAPI + uvicorn) for `groundstation`; pip-only, no rosdep key.
 python3 -m pip install -q --break-system-packages -r /workspace/GroundstationAPI/requirements.txt \
     || echo "WARNING: could not install GroundstationAPI requirements (offline?)"
+
+# City worlds (Worlds/city): PX4 loads worlds from its own folder, so link ours there, and let
+# Gazebo find the city models cloned into external/ (see Worlds/city/README.md; the models name
+# their meshes model://<name>/..., which needs their parent folder on GZ_SIM_RESOURCE_PATH).
+for world in /workspace/Worlds/city/*.sdf; do
+    ln -sfn "$world" "/opt/px4-gazebo/share/gz/worlds/$(basename "$world")"
+done
+CITY_MODELS=/workspace/external/RoboticsInfrastructure/CustomRobots
+sed -i '/^export GZ_SIM_RESOURCE_PATH=.*RoboticsInfrastructure/d' /etc/bash.bashrc
+echo "export GZ_SIM_RESOURCE_PATH=$CITY_MODELS/city_assets/models:$CITY_MODELS/drone_cat_mouse/models:\$GZ_SIM_RESOURCE_PATH" >> /etc/bash.bashrc
