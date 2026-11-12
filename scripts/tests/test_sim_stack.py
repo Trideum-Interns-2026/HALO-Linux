@@ -13,9 +13,7 @@ def run(*args, state_dir):
     return subprocess.run([SCRIPT, *args], capture_output=True, text=True, env=env, timeout=60)
 
 
-@pytest.mark.parametrize("args", [[], ["bogus"], ["up", "--bogus"], ["up", "--gui", "extra"],
-                                  ["up", "--world"], ["up", "--world", "bad name"],
-                                  ["up", "--world", "a;b"]])
+@pytest.mark.parametrize("args", [[], ["bogus"], ["up", "--bogus"], ["up", "--gui", "extra"]])
 def test_bad_arguments_print_usage_and_exit_2(args, tmp_path):
     result = run(*args, state_dir=tmp_path)
     assert result.returncode == 2

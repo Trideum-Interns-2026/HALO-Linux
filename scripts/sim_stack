@@ -2,11 +2,9 @@
 # Sim only. Bring the whole HALO stack up and leave it running (unlike sim_check, which tears
 # down), or stop it again. It never arms, takes off or moves the vehicle: use `sitl_vehicle` for that.
 #
-#   sim_stack up [--gui] [--world NAME]
-#                          PX4 SITL + Gazebo, sim links, perception (+ box overlay), geolocation,
+#   sim_stack up [--gui]   PX4 SITL + Gazebo, sim links, perception (+ box overlay), geolocation,
 #                          tracking, ui bridge, and a person 5 m ahead. --gui opens the Gazebo
 #                          window and the Perception debug view on DISPLAY (via vglrun).
-#                          --world picks the Gazebo world (default: default; baylands loads for minutes).
 #   sim_stack status       which parts are running
 #   sim_stack down         stop everything this script started, then check nothing is left
 #
@@ -16,7 +14,6 @@
 STATE_DIR="${HALO_STACK_DIR:-/tmp/halo-stack}"
 REPO="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
 WORLD_WAIT_S="${HALO_WORLD_WAIT_S:-120}"
-BIG_WORLD_WAIT_S=300
 LEFTOVER='bin/px4|gz sim|MicroXRCE|parameter_bridge|ros2 launch|yolo_person|detection_overlay|debug_view|tracking_node|geolocation_node|ui_bridge'
 # In the command line of every group leader start() creates; tells our processes from a reused pid.
 MARKER='tail -f /dev/null | exec'
@@ -26,7 +23,7 @@ source /opt/ros/jazzy/setup.bash
 [[ -f /opt/ros2_ws/install/setup.bash ]] && source /opt/ros2_ws/install/setup.bash
 set -u   # after the ROS setup files, which are not nounset-safe
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 ours() {  # ours <pid>: alive AND one of our group leaders (a pid file can outlive its process)
     [[ "$1" =~ ^[0-9]+$ && -r "/proc/$1/cmdline" ]] \
@@ -55,20 +52,10 @@ start() {  # start <name> <command...>: own session, logged, pid recorded
 }
 
 cmd_up() {
-    local gui=0 left waited=0 world=""
-    while (( $# )); do
-        case "$1" in
-            --gui) gui=1 ;;
-            --world) shift; world="${1:-}"; [[ "$world" =~ ^[A-Za-z0-9_]+$ ]] || usage ;;
-            *) usage ;;
-        esac
-        shift
+    local gui=0 a left waited=0
+    for a in "$@"; do
+        case "$a" in --gui) gui=1 ;; *) usage ;; esac
     done
-    if [[ -n "$world" ]]; then
-        export PX4_GZ_WORLD="$world"
-        # A big world (baylands) loads large meshes: wait longer for it.
-        [[ "$world" == default ]] || WORLD_WAIT_S="${HALO_WORLD_WAIT_S:-$BIG_WORLD_WAIT_S}"
-    fi
     left="$(leftovers)"
     if [[ -n "$left" ]]; then
         echo "something from a previous run is still up; run 'sim_stack down' first. Matched:" >&2

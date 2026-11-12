@@ -81,10 +81,13 @@ echo "alias ui='ros2 launch ui ui.launch.py'" >> /etc/bash.bashrc
 sed -i '/^alias movement=/d' /etc/bash.bashrc
 echo "alias movement='ros2 launch movement movement.launch.py'" >> /etc/bash.bashrc
 # Whole sim stack in one command (up/down/status; never arms), the web dashboard, and all tests.
-sed -i '/^alias simstack=/d; /^alias groundstation=/d; /^alias halo_test=/d; /^alias baylands_demo=/d' /etc/bash.bashrc
+sed -i '/^alias simstack=/d; /^alias groundstation=/d; /^alias halo_test=/d' /etc/bash.bashrc
 echo "alias simstack='/workspace/scripts/sim_stack'" >> /etc/bash.bashrc
 echo "alias groundstation='python3 -m uvicorn main:app --app-dir /workspace/GroundstationAPI --host 127.0.0.1 --port 8000'" >> /etc/bash.bashrc
 echo "alias halo_test='/workspace/scripts/halo_test'" >> /etc/bash.bashrc
+# Baylands demo: drone spawns 200 m from the person, flies to them, follows once it sees them.
+sed -i '/^alias baylands_demo=/d' /etc/bash.bashrc
+echo "alias baylands_demo='/workspace/scripts/sim_check --world baylands --approach 200 --gui'" >> /etc/bash.bashrc
 # Web API dependencies (FastAPI + uvicorn) for `groundstation`; pip-only, no rosdep key.
 python3 -m pip install -q --break-system-packages -r /workspace/GroundstationAPI/requirements.txt \
     || echo "WARNING: could not install GroundstationAPI requirements (offline?)"

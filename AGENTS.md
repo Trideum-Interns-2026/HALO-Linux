@@ -113,6 +113,7 @@ HEADLESS=1 fly            # same, no Gazebo window
 perceive                  # terminal 2: camera bridge + YOLO detector (ros2 launch perception perception.launch.py)
 movement                  # movement service (ros2 launch movement movement.launch.py); needs an armed, airborne vehicle
 sim_check [--gui|--watch]   # one command: whole stack in the sim, arms and flies it, PASS/FAIL table, tears down (SITL only)
+baylands_demo             # sim_check --world baylands --approach 200 --gui: the drone spawns 200 m from the person, flies to them, Movement follows once Perception sees them
 simlinks                  # sim-only: GPS bridge -> /gps/fix + uXRCE-DDS agent (/fmu/...); run next to fly
 sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link|goto --north N --east E [--speed V]|hold   # SITL only; goto legs <= 60 m, <= 8 m/s; human (/arm) or sim-operator; uses PX4 port 14580, runs alongside movement
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)
@@ -120,7 +121,7 @@ tracking                  # tracking service (ros2 launch tracking tracking.laun
 geolocation               # geolocation service (ros2 launch geolocation geolocation.launch.py)
 ui                        # UI bridge node (ros2 launch ui ui.launch.py)
 groundstation             # web API + dashboard on http://127.0.0.1:8000 (port 8000 is forwarded by both dev containers)
-simstack up [--gui] [--world NAME]   # whole sim stack in one command, left running; never arms. simstack status | down
+simstack up [--gui]       # whole sim stack in one command, left running; never arms. simstack status | down
 halo_test [scripts|perception|ui|web|ros]   # run every test suite, one PASS/FAIL line each
 ./scripts/move <n_m> <e_m>   # short waypoint test, |offset| <= 2 m, vehicle must already be airborne
 
