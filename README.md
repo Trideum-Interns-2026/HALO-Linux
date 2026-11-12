@@ -65,6 +65,23 @@ what the demo runs; `perceive` and `track` use it by default.
   `spawn_person [x] [y] [yaw]` (default 5 0 0, facing the drone), or
   `MARKER=1 spawn_person` for the marked one. Spawning it removes
   `red_sphere`, so the detectors only ever see one target.
+- To walk the standing person around from the keyboard, spawn him
+  (`spawn_person` or `perceive`), then run
+  `/workspace/Perception/scripts/walk_person.py [x] [y] [yaw]` with the same
+  position (default 5 0 0) and drive from the small window it opens (W/S
+  walk, A/D turn, Q/E sidestep, Shift run; any keys at once). His mesh is a
+  single frozen pose with no skeleton or animations, so he glides rather
+  than walks.
+- `/workspace/Perception/scripts/walk_actor.py [x] [y] [yaw]` spawns and
+  drives a different, animated human instead (`walking_person.sdf`, a
+  Gazebo actor from Fuel using the built-in FollowActor system, chasing an
+  invisible `walk_target` the script moves), with the same keys minus
+  running. It replaces `standing_person`/`red_sphere`. Gazebo can't remove
+  actors, so re-running it reuses him (he walks to the new start); restart
+  the sim for a fresh one. He's ~1.75m tall, so `person_detector`'s
+  1.9m-based distance estimate reads ~8% far on him.
+- Both need `python3-tk` and `python3-protobuf`, and run on system
+  `/usr/bin/python3`, not a virtualenv.
 
 To select a target type, set `PERCEIVE_TARGET` for both `perceive` and
 `track`:
