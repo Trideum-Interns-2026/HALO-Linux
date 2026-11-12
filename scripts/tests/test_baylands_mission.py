@@ -244,3 +244,188 @@ def test_without_a_simulator_model_or_perception_it_refuses_to_start(monkeypatch
     monkeypatch.setenv("PX4_SIM_MODEL", "gz_x500_depth")
     assert bm.main([]) == 2
     assert "Perception" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------ the mini ground station
+
+API_FIELDS = {"latitude", "longitude", "altitude_m", "heading_deg", "ground_speed_mps",
+              "battery_percent", "flight_mode", "target_latitude", "target_longitude",
+              "target_altitude_m", "target_distance_m"}
+DRONE = (37.41203, -122.00003, 44.1)
+PERSON = (37.41217, -121.99888, 38.9)
+
+
+def sample(**kw):
+    args = dict(drone_lla=DRONE, tracking_lla=PERSON, tracking_age_s=0.5, heading_deg=8.6,
+                speed_mps=4.9, battery_percent=97.0, mode="Hold", phase="approach", height_m=6.1,
+                range_m=26.7)
+    args.update(kw)
+    return bm.build_sample(**args)
+
+
+def test_sample_has_everything_the_dashboard_shows():
+    s = sample()
+    assert set(s) == API_FIELDS
+    assert (s["latitude"], s["longitude"], s["altitude_m"]) == DRONE
+    assert (s["target_latitude"], s["target_longitude"], s["target_altitude_m"]) == PERSON
+    assert s["heading_deg"] == pytest.approx(8.6) and s["ground_speed_mps"] == pytest.approx(4.9)
+    assert s["battery_percent"] == 97.0 and s["target_distance_m"] == pytest.approx(26.7)
+    assert s["flight_mode"] == "Hold approach 6.1 m AGL"        # height above ground, not AMSL
+
+
+def test_sample_without_a_drone_position_is_none():
+    assert sample(drone_lla=None) is None
+    assert sample(drone_lla=(float("nan"), 0.0, 0.0)) is None
+    assert sample(drone_lla=(91.0, 0.0, 0.0)) is None
+    assert sample(drone_lla=(0.0, 181.0, 0.0)) is None
+
+
+@pytest.mark.parametrize("age,shown", [(0.0, True), (2.0, True), (2.01, False), (60.0, False)])
+def test_person_is_shown_only_while_tracking_is_fresh(age, shown):
+    s = sample(tracking_age_s=age)
+    assert ("target_latitude" in s) is shown and ("target_distance_m" in s) is shown
+
+
+def test_person_missing_when_tracking_never_spoke():
+    s = sample(tracking_lla=None, tracking_age_s=None, range_m=None)
+    assert not any(k.startswith("target_") for k in s)
+
+
+@pytest.mark.parametrize("heading,expected", [
+    (0.0, 0.0), (359.9, 359.9), (360.0, 0.0), (-10.0, 350.0), (725.0, 5.0), (-1e-17, 0.0),
+])
+def test_heading_is_wrapped_into_the_apis_range(heading, expected):
+    h = sample(heading_deg=heading)["heading_deg"]
+    assert 0.0 <= h < 360.0
+    assert h == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("key,kw", [
+    ("heading_deg", {"heading_deg": None}), ("heading_deg", {"heading_deg": float("nan")}),
+    ("ground_speed_mps", {"speed_mps": -0.1}), ("ground_speed_mps", {"speed_mps": None}),
+    ("battery_percent", {"battery_percent": None}),
+    ("battery_percent", {"battery_percent": 100.1}),
+    ("battery_percent", {"battery_percent": -1.0}),
+    ("target_distance_m", {"range_m": -1.0}), ("target_distance_m", {"range_m": float("inf")}),
+])
+def test_values_the_api_would_refuse_are_left_out_not_sent(key, kw):
+    assert key not in sample(**kw)
+
+
+def test_flight_mode_fits_the_apis_limit():
+    s = sample(mode="Offboard", phase="a very long phase name that goes on", height_m=123.45)
+    assert 1 <= len(s["flight_mode"]) <= 40
+    assert sample(height_m=None)["flight_mode"] == "Hold approach"
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8000", "http://localhost:8000/",
+                                 "https://[::1]:8443"])
+def test_local_dashboard_urls_are_accepted(url):
+    assert bm.check_web_api_url(url) == url.rstrip("/")
+
+
+@pytest.mark.parametrize("url", ["http://10.0.0.5:8000", "http://example.com",
+                                 "file:///etc/passwd", "ftp://127.0.0.1/x", "127.0.0.1:8000", ""])
+def test_non_local_dashboard_urls_are_refused(url):
+    with pytest.raises(ValueError):
+        bm.check_web_api_url(url)
+
+
+def _server(status=200, delay_s=0.0):
+    import json
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append((self.path, json.loads(body)))
+            time.sleep(delay_s)
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+
+        def log_message(self, *args):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, received
+
+
+def test_dashboard_posts_the_newest_sample_and_reports_reachable():
+    import time
+    httpd, received = _server()
+    dash = bm.Dashboard("http://127.0.0.1:%d" % httpd.server_port)
+    try:
+        assert dash.reachable() is True
+        dash.publish(sample())
+        deadline = time.monotonic() + 3.0
+        while not received and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert received and received[0][0] == "/api/telemetry"
+        assert received[0][1]["flight_mode"] == "Hold approach 6.1 m AGL"
+    finally:
+        dash.close()
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_dashboard_never_blocks_or_raises_when_the_api_is_down_or_slow():
+    import time
+    dash = bm.Dashboard("http://127.0.0.1:1")           # nothing listens there
+    try:
+        assert dash.reachable() is False
+        started = time.monotonic()
+        for _ in range(50):
+            dash.publish(sample())
+        assert time.monotonic() - started < 0.5
+    finally:
+        dash.close()
+    httpd, _received = _server(delay_s=1.6)             # slower than DASHBOARD_TIMEOUT_S
+    dash = bm.Dashboard("http://127.0.0.1:%d" % httpd.server_port)
+    try:
+        started = time.monotonic()
+        dash.publish(sample())
+        assert time.monotonic() - started < 0.2
+    finally:
+        dash.close()
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_dashboard_refuses_a_remote_url():
+    with pytest.raises(ValueError):
+        bm.Dashboard("http://10.1.2.3:8000")
+
+
+def test_pilot_sample_is_built_from_its_state():
+    import time
+    pilot = bm.Pilot()
+    assert pilot.sample() is None                       # no position yet
+    pilot.geo = DRONE
+    pilot.local = (10.0, 20.0, -6.1, 3.0, 4.0, 0.0)     # NED: 6.1 m up, 5 m/s over the ground
+    pilot.heading_deg, pilot.battery_percent = 8.6, 97.0
+    pilot.mode, pilot.phase = "Hold", "approach"
+    pilot.tracking, pilot.tracking_at = (*PERSON[:2], 1.0, 1.0, 1.0, PERSON[2]), time.monotonic()
+    s = pilot.sample()
+    assert s["ground_speed_mps"] == pytest.approx(5.0)
+    assert s["flight_mode"] == "Hold approach 6.1 m AGL"
+    assert s["target_latitude"] == PERSON[0] and s["target_altitude_m"] == PERSON[2]
+    pilot.tracking_at = time.monotonic() - 10.0         # Tracking went quiet
+    assert "target_latitude" not in pilot.sample()
+
+
+def test_pilot_falls_back_to_the_autopilots_position_without_geolocation():
+    pilot = bm.Pilot()
+    pilot.global_pos = (37.41, -122.0, 45.0, 6.0)
+    s = pilot.sample()
+    assert (s["latitude"], s["longitude"], s["altitude_m"]) == (37.41, -122.0, 45.0)

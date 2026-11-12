@@ -113,7 +113,7 @@ HEADLESS=1 fly            # same, no Gazebo window
 perceive                  # terminal 2: camera bridge + YOLO detector (ros2 launch perception perception.launch.py)
 movement                  # movement service (ros2 launch movement movement.launch.py); needs an armed, airborne vehicle
 sim_check [--gui|--watch]   # one command: whole stack in the sim, arms and flies it, PASS/FAIL table, tears down (SITL only)
-python3 scripts/baylands_mission.py [--headless]   # SITL only, one file: Baylands, drone starts 103 m from the person, arms, flies at 20 ft to 25 m from them, Movement follows at 20 m, lands, tears down
+python3 scripts/baylands_mission.py [--headless]   # SITL only, one file: Baylands, drone starts 103 m from the person, arms, flies at 20 ft to 25 m from them, Movement follows at 20 m, lands, tears down; publishes the flight to the dashboard when `groundstation` runs (then the ui bridge is not started)
 simlinks                  # sim-only: GPS bridge -> /gps/fix + uXRCE-DDS agent (/fmu/...); run next to fly
 sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # SITL only; human (/arm) or sim-operator; uses PX4 port 14580, runs alongside movement
 spawn_person [x] [y] [yaw]   # test target, default 5 0 0 (5 m ahead, facing the drone)

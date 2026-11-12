@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Baylands mission, flown the way a human pilot would, SITL only. Everything is in this file.
 
-    python3 scripts/baylands_mission.py [--headless] [--linger S] [--plan]
+    python3 scripts/baylands_mission.py [--headless] [--linger S] [--plan] [--no-dashboard]
         [--launch-xy=X,Y] [--person-xy=X,Y]
 
 Documented purpose (AGENTS.md, "Safety and hardware readiness"): this program brings up the
@@ -26,6 +26,14 @@ The mission, as a pilot would fly it:
      the person for LOST_ABORT_S the pilot takes over instead of letting Movement circle.
   6. Stop Movement (PX4 goes back to Hold), land, disarm, shut everything down.
 
+The mini ground station (GroundstationAPI, start it with `groundstation`) gets the flight as it
+happens, twice a second: the drone's position, heading, ground speed and battery, a flight-mode
+line with the mission phase and the height above ground, and the person's position and range
+from Tracking. altitude_m on the dashboard is height above the WGS84 ellipsoid (the Baylands
+ground is at about 38 m), which is why the mode line also carries the height above ground. While
+the mission publishes, the ui bridge is not started: two publishers would overwrite each other's
+fields. --no-dashboard turns this off and starts the ui bridge as usual.
+
 Safety, all enforced in code: every command is bounded (MAX_ALT_M, MAX_LEG_M, MAX_SPEED_MPS, total
 distance and time); on any failure, Ctrl+C or timeout the drone holds, lands and disarms, and the
 simulator is torn down. The MAVLink link is the local TCP bridge only (tcp:127.0.0.1:5760).
@@ -40,12 +48,16 @@ launch point.
 """
 
 import argparse
+import json
 import math
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
+import urllib.parse
+import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = "/tmp/halo-mission"
@@ -101,6 +113,12 @@ FOLLOW_TOL_M = 4.0
 FOLLOW_STABLE_S = 10.0           # inside the follow band this long counts as followed
 LANDED_Z_M = -0.3                # NED z above this: on the ground
 
+WEB_API_URL = os.environ.get("HALO_WEB_API_URL", "http://127.0.0.1:8000")
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")   # the dashboard is local too
+DASHBOARD_PERIOD_S = 0.5
+DASHBOARD_TIMEOUT_S = 1.0
+DASHBOARD_FRESH_S = 2.0          # a Tracking message this recent shows the person on the dashboard
+FLIGHT_MODE_MAX_CHARS = 40       # the API's limit for flight_mode
 ENDPOINT = ("127.0.0.1", 5760)   # the local MAVLink TCP bridge; nothing else is ever used
 GCS_SYSTEM_ID, GCS_COMPONENT_ID = 255, 190
 EARTH_RADIUS_M = 6378137.0
@@ -198,6 +216,52 @@ def in_follow_band(distance_m):
     return abs(distance_m - FOLLOW_DISTANCE_M) <= FOLLOW_TOL_M
 
 
+def check_web_api_url(url):
+    """The dashboard must be a local http(s) server; ValueError otherwise."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or parts.hostname not in LOCAL_HOSTS:
+        raise ValueError("the dashboard URL must be http(s) on this machine, got %r" % url)
+    return url.rstrip("/")
+
+
+def _finite(*values):
+    return all(v is not None and math.isfinite(v) for v in values)
+
+
+def build_sample(drone_lla, tracking_lla, tracking_age_s, heading_deg, speed_mps, battery_percent,
+                 mode, phase, height_m, range_m):
+    """The JSON body for the dashboard's Telemetry model, or None without a drone position.
+
+    drone_lla and tracking_lla are (latitude deg, longitude deg, altitude m); the person is left
+    out when Tracking has been silent for more than DASHBOARD_FRESH_S. Values the API would
+    refuse (out of range, not finite) are left out instead of failing the whole sample.
+    """
+    if (drone_lla is None or not _finite(*drone_lla) or abs(drone_lla[0]) > 90.0
+            or abs(drone_lla[1]) > 180.0):
+        return None
+    sample = {"latitude": drone_lla[0], "longitude": drone_lla[1], "altitude_m": drone_lla[2]}
+    if _finite(heading_deg):
+        heading = heading_deg % 360.0
+        sample["heading_deg"] = heading if heading < 360.0 else 0.0
+    if _finite(speed_mps) and speed_mps >= 0.0:
+        sample["ground_speed_mps"] = speed_mps
+    if _finite(battery_percent) and 0.0 <= battery_percent <= 100.0:
+        sample["battery_percent"] = battery_percent
+    label = "%s %s" % (mode, phase)
+    if _finite(height_m):
+        label += " %.1f m AGL" % height_m
+    sample["flight_mode"] = label[:FLIGHT_MODE_MAX_CHARS]
+    if (tracking_lla is not None and tracking_age_s is not None
+            and tracking_age_s <= DASHBOARD_FRESH_S and _finite(*tracking_lla)
+            and abs(tracking_lla[0]) <= 90.0 and abs(tracking_lla[1]) <= 180.0):
+        sample["target_latitude"] = tracking_lla[0]
+        sample["target_longitude"] = tracking_lla[1]
+        sample["target_altitude_m"] = tracking_lla[2]
+        if _finite(range_m) and range_m >= 0.0:
+            sample["target_distance_m"] = range_m
+    return sample
+
+
 def px4_mode_name(custom_mode):
     """Human name of a PX4 HEARTBEAT custom_mode (Hold, Offboard, Return, ...)."""
     main = (int(custom_mode) >> 16) & 0xFF
@@ -278,7 +342,7 @@ def world_up():
     return rc == 0 and ("/world/%s/create" % WORLD) in out.split()
 
 
-def bring_up(geometry, gui):
+def bring_up(geometry, gui, with_ui=True):
     say("starting the simulator (%s) in %s, drone at x=%.1f y=%.1f"
         % ("with the Gazebo window" if gui else "headless", WORLD, *geometry["launch_xy"]))
     env = {"PX4_GZ_WORLD": WORLD, "PX4_GZ_MODEL_POSE": geometry["model_pose"],
@@ -303,7 +367,8 @@ def bring_up(geometry, gui):
     start("tracking", ["ros2", "launch", "tracking", "tracking.launch.py", "use_sim_time:=true"])
     start("perception", ["ros2", "launch", "perception", "perception.launch.py"]
           + (["overlay:=true"] if gui else []))
-    start("ui", ["ros2", "launch", "ui", "ui.launch.py"])
+    if with_ui:    # otherwise the mission itself publishes to the dashboard
+        start("ui", ["ros2", "launch", "ui", "ui.launch.py"])
     if gui:   # the camera as Perception sees it, with the detected box drawn on it
         start("perception_view", ["ros2", "run", "perception", "debug_view"],
               {"DISPLAY": os.environ.get("DISPLAY", ":0")})
@@ -322,6 +387,57 @@ def tear_down():
     left = leftovers()
     say("nothing left running" if not left else "LEFT RUNNING: " + "; ".join(l[:70] for l in left))
     return not left
+
+
+class Dashboard:
+    """Posts the latest sample to the mini ground station from a worker thread, so a slow or
+    absent web API never delays the pilot's loop. Only the newest sample is kept."""
+
+    def __init__(self, url):
+        self.base = check_web_api_url(url)
+        self._latest = None
+        self._stop = False
+        self._cond = threading.Condition()
+        self._last_complaint = 0.0
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def reachable(self):
+        try:
+            with urllib.request.urlopen(self.base + "/api/health", timeout=2.0) as resp:
+                return resp.status == 200
+        except (OSError, ValueError):
+            return False
+
+    def publish(self, sample):
+        with self._cond:
+            self._latest = sample
+            self._cond.notify()
+
+    def _run(self):
+        while True:
+            with self._cond:
+                while self._latest is None and not self._stop:
+                    self._cond.wait(0.5)
+                if self._stop:
+                    return
+                sample, self._latest = self._latest, None
+            request = urllib.request.Request(
+                self.base + "/api/telemetry", data=json.dumps(sample).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=DASHBOARD_TIMEOUT_S) as resp:
+                    resp.read()
+            except (OSError, ValueError) as err:
+                if time.monotonic() - self._last_complaint > 30.0:
+                    self._last_complaint = time.monotonic()
+                    say("dashboard post failed (%s); the flight carries on" % err)
+
+    def close(self):
+        with self._cond:
+            self._stop = True
+            self._cond.notify()
+        self._thread.join(timeout=3.0)
 
 
 # ================================================================================================
@@ -347,7 +463,12 @@ class Pilot:
         self.acks = {}
         self.detections = []       # monotonic arrival times of confident detections
         self.last_detection = None
-        self.geo = None            # (lat, lon) of the drone from Geolocation
+        self.geo = None            # (lat, lon, alt) of the drone from Geolocation
+        self.heading_deg = None    # from ATTITUDE
+        self.battery_percent = None
+        self.phase = "preflight"   # what the mission is doing, shown on the dashboard
+        self.dashboard = None      # a Dashboard, when publishing
+        self.last_published = 0.0
         self.tracking = None       # (lat, lon, ex, ey, ez) of the person from Tracking
         self.tracking_at = 0.0     # monotonic arrival time of the last Tracking message
         self.node = None
@@ -372,15 +493,33 @@ class Pilot:
         self.node.create_subscription(Detection, "/perception/detection", on_detection, qos)
         self.node.create_subscription(
             GeolocationState, "/geolocation/position",
-            lambda m: setattr(self, "geo", (m.latitude_deg, m.longitude_deg)), qos)
+            lambda m: setattr(self, "geo", (m.latitude_deg, m.longitude_deg, m.altitude_m)), qos)
+
         def on_tracking(msg):
             self.tracking = (msg.latitude_deg, msg.longitude_deg, msg.error_x_m, msg.error_y_m,
-                             msg.error_z_m)
+                             msg.error_z_m, msg.altitude_m)
             self.tracking_at = time.monotonic()
 
         self.node.create_subscription(TrackingState, "/tracking/position", on_tracking, qos)
 
+    def sample(self):
+        """What the dashboard shows right now (see build_sample), or None."""
+        drone = self.geo
+        if drone is None and self.global_pos is not None:
+            drone = (self.global_pos[0], self.global_pos[1], self.global_pos[2])
+        fresh = time.monotonic() - self.tracking_at
+        person = None
+        if self.tracking is not None:
+            person = (self.tracking[0], self.tracking[1], self.tracking[5])
+        speed = self.speed_mps() if self.local is not None else None
+        height = self.height_m() if self.local is not None else None
+        return build_sample(drone, person, fresh, self.heading_deg, speed, self.battery_percent,
+                            self.mode, self.phase, height,
+                            tracking_range_m(self) if person is not None else None)
+
     def close(self):
+        if self.dashboard is not None:
+            self.dashboard.close()
         try:
             if self.node is not None:
                 self.node.destroy_node()
@@ -405,6 +544,11 @@ class Pilot:
             elif kind == "GLOBAL_POSITION_INT":
                 self.global_pos = (msg.lat / 1e7, msg.lon / 1e7, msg.alt / 1000.0,
                                    msg.relative_alt / 1000.0)
+            elif kind == "ATTITUDE":
+                self.heading_deg = math.degrees(msg.yaw) % 360.0
+            elif kind in ("SYS_STATUS", "BATTERY_STATUS"):
+                if msg.battery_remaining >= 0:      # -1 means the autopilot does not know
+                    self.battery_percent = float(msg.battery_remaining)
             elif kind == "COMMAND_ACK":
                 self.acks[msg.command] = msg.result
             elif kind == "HEARTBEAT" and msg.autopilot == self.cmd.MAV_AUTOPILOT_PX4:
@@ -413,6 +557,11 @@ class Pilot:
                 self.mode = px4_mode_name(msg.custom_mode)
         if self.node is not None:
             self.rclpy.spin_once(self.node, timeout_sec=0.0)
+        if self.dashboard is not None and now - self.last_published >= DASHBOARD_PERIOD_S:
+            self.last_published = now
+            sample = self.sample()
+            if sample is not None:
+                self.dashboard.publish(sample)
         time.sleep(0.05)
 
     def wait_until(self, predicate, timeout_s):
@@ -561,7 +710,18 @@ def mission(args, geometry):
     person_ne = geometry["person_ned"]
     pilot = Pilot()
     try:
-        bring_up(geometry, not args.headless)
+        if not args.no_dashboard:
+            try:
+                dashboard = Dashboard(WEB_API_URL)
+            except ValueError as err:
+                raise RuntimeError(str(err))
+            if dashboard.reachable():
+                pilot.dashboard = dashboard
+                say("publishing the flight to the mini ground station at %s" % dashboard.base)
+            else:
+                dashboard.close()
+                say("no web API on %s (run `groundstation`): not publishing" % WEB_API_URL)
+        bring_up(geometry, not args.headless, with_ui=pilot.dashboard is None)
         pilot.open_ros()
         if not pilot.connect():
             raise RuntimeError("no position from the autopilot")
@@ -569,12 +729,14 @@ def mission(args, geometry):
         if not pilot.arm():
             raise RuntimeError("could not arm within %.0f s (see %s/fly.log)"
                                % (ARM_WAIT_S, LOG_DIR))
+        pilot.phase = "climb"
         say("armed, climbing to %.1f m (20 ft)" % CRUISE_ALT_M)
         if not pilot.takeoff(CRUISE_ALT_M):
             raise RuntimeError("takeoff was refused")
         if not pilot.wait_until(lambda: pilot.height_m() >= 0.9 * CRUISE_ALT_M, CLIMB_WAIT_S):
             raise RuntimeError("did not reach %.1f m (at %.1f m)" % (CRUISE_ALT_M,
                                                                        pilot.height_m()))
+        pilot.phase = "approach"
         say("at %.1f m. Flying towards the person, %.0f m away, in legs of %.0f m at %.0f m/s, "
             "watching the camera" % (pilot.height_m(), geometry["distance_m"], MAX_LEG_M,
                                      MAX_SPEED_MPS))
@@ -583,6 +745,7 @@ def mission(args, geometry):
         if reason:
             raise RuntimeError("%s (flew %.0f m, %.0f m from the person)"
                                % (reason, flown, remaining))
+        pilot.phase = "engage"
         say("at the engage point: %.0f m from the person after flying %.0f m, holding at %.1f m"
             % (remaining, flown, pilot.height_m()))
 
@@ -613,6 +776,7 @@ def mission(args, geometry):
         start("movement", ["ros2", "launch", "movement", "movement.launch.py",
                            "params_file:=" + MOVEMENT_PARAMS])
         movement_started = time.monotonic()
+        pilot.phase = "follow"
         band_since = None
         end = time.monotonic() + FOLLOW_TIMEOUT_S
         closest = float("inf")
@@ -638,6 +802,7 @@ def mission(args, geometry):
             raise RuntimeError("Movement never settled within %.1f m of %.0f m"
                                % (FOLLOW_TOL_M, FOLLOW_DISTANCE_M))
         stop("movement")
+        pilot.phase = "hold"
         got_hold = pilot.wait_until(lambda: pilot.mode == "Hold", STOP_WAIT_S)
         say("Movement off, PX4 mode %s" % pilot.mode)
         summary["handed_back_to_hold"] = got_hold
@@ -658,6 +823,7 @@ def finish(args, pilot, summary):
         if pilot.link is not None and pilot.local is not None:
             pilot.pump()
             if pilot.armed:
+                pilot.phase = "landing"
                 say("holding, then landing")
                 pilot.hold()
                 summary["landed"] = pilot.land()
@@ -683,6 +849,8 @@ def main(argv=None):
     ap.add_argument("--linger", type=float, default=20.0, metavar="S",
                     help="seconds to keep the window up after landing (default %(default)s)")
     ap.add_argument("--plan", action="store_true", help="print the geometry and exit")
+    ap.add_argument("--no-dashboard", action="store_true",
+                    help="do not publish to the mini ground station; start the ui bridge instead")
     ap.add_argument("--launch-xy", default=None, metavar="X,Y",
                     help="drone start, world metres (default %g,%g); use = for negatives"
                     % LAUNCH_XY)
