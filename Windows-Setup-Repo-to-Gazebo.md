@@ -111,8 +111,6 @@ Arming and flight:
 - Arm and take off in QGroundControl, or with `sitl_vehicle arm`,
   `sitl_vehicle takeoff [m]` (SITL only, takeoff up to 10 m), `sitl_vehicle land`,
   `sitl_vehicle disarm`, `sitl_vehicle status`.
-- `baylands_demo`: Baylands world, the drone starts 200 m from the person, flies to them in short
-  legs and starts following when Perception sees them (`sim_check --world baylands --approach 200 --gui`).
 - `sim_check [--gui|--watch]`: runs the whole stack, arms and flies it, prints
   a PASS/FAIL table, then tears down.
 - `simstack up [--gui]`, `simstack status`, `simstack down`: whole stack in one

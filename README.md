@@ -31,13 +31,12 @@ tracking                     # person position service
 ui                           # UI bridge node (posts to the web API)
 movement                     # follow service; needs an armed, airborne vehicle
 spawn_person [x] [y] [yaw]   # sim only: test target, default 5 0 0 (5 m ahead, facing the drone)
-simstack up [--gui]          # sim only: whole sim stack in one command, left running
+simstack up [--gui] [--world baylands]   # sim only: whole sim stack, left running
 simstack status              # which parts of the stack are running
 simstack down                # stop what simstack started
 groundstation                # web dashboard at http://127.0.0.1:8000 (API docs at /docs)
 halo_test                    # all tests (no sim, GPU or Triton needed)
 sim_check [--gui|--watch]    # sim only: whole stack, flies it, PASS/FAIL table, tears down
-baylands_demo                # sim only: Baylands, the drone starts 200 m from the person, flies to them, follows once it sees them
 sitl_vehicle arm|takeoff [m]|land|disarm|status|position|link   # sim only, run by a human
 ```
 
