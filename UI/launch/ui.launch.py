@@ -1,7 +1,7 @@
-"""Start the UI bridge node. In the simulator pass use_sim_time:=true (see scripts/sim_links):
-position stamps are Gazebo sim time. Leave it false on real hardware.
+"""Start the UI bridge node.
 api_url:=http://HOST:8000/api/telemetry points the bridge at a web API that is not on localhost
-(for example in another container)."""
+(for example in another container). use_sim_time:=true is optional: the bridge counts input age
+from arrival, so it works either way."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
