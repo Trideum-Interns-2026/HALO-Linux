@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Sim only. Bring the whole HALO stack up and leave it running (unlike sim_check, which tears
+# down), or stop it again. It never arms, takes off or moves the vehicle: use `sitl_vehicle` for that.
+#
+#   sim_stack up [--gui]   PX4 SITL + Gazebo, sim links, perception (+ box overlay), geolocation,
+#                          tracking, ui bridge, and a person 5 m ahead. --gui opens the Gazebo
+#                          window and the Perception debug view on DISPLAY (via vglrun).
+#   sim_stack status       which parts are running
+#   sim_stack down         stop everything this script started, then check nothing is left
+#
+# The web API is separate: run `groundstation` (not part of the sim).
+# Movement is not started here: it needs an armed, airborne vehicle (`movement`).
+# Logs and pids: $STATE_DIR (default /tmp/halo-stack).
+STATE_DIR="${HALO_STACK_DIR:-/tmp/halo-stack}"
+REPO="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
+WORLD_WAIT_S="${HALO_WORLD_WAIT_S:-120}"
+LEFTOVER='bin/px4|gz sim|MicroXRCE|parameter_bridge|ros2 launch|yolo_person|detection_overlay|debug_view|tracking_node|geolocation_node|ui_bridge'
+
+source /opt/ros/jazzy/setup.bash
+[[ -f /opt/px4_ros2/install/setup.bash ]] && source /opt/px4_ros2/install/setup.bash
+[[ -f /opt/ros2_ws/install/setup.bash ]] && source /opt/ros2_ws/install/setup.bash
+set -u   # after the ROS setup files, which are not nounset-safe
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+
+running() {  # running <name>: the group leader recorded in the pid file is alive
+    local f="$STATE_DIR/$1.pid"
+    [[ -f "$f" ]] && kill -0 "$(cat "$f")" 2>/dev/null
+}
+
+start() {  # start <name> <command...>: own session, logged, pid recorded
+    local name="$1"; shift
+    # stdin from a pipe that never closes: the PX4 console spins at 100% CPU on EOF.
+    setsid bash -c 'tail -f /dev/null | exec "$@"' _ "$@" > "$STATE_DIR/$name.log" 2>&1 &
+    echo $! > "$STATE_DIR/$name.pid"
+    echo "started $name (pid $!)"
+}
+
+cmd_up() {
+    local gui=0
+    for a in "$@"; do
+        case "$a" in --gui) gui=1 ;; *) usage ;; esac
+    done
+    if pgrep -f "$LEFTOVER" > /dev/null; then
+        echo "something from a previous run is still up; run 'sim_stack down' first. Matched:" >&2
+        pgrep -af "$LEFTOVER" | cut -c1-120 >&2
+        exit 1
+    fi
+    mkdir -p "$STATE_DIR"
+    if (( gui )); then
+        DISPLAY="${DISPLAY:-:0}"; export DISPLAY
+        xdpyinfo > /dev/null 2>&1 || { echo "no X display on $DISPLAY" >&2; exit 1; }
+        start fly vglrun -d egl "$REPO/scripts/fly"
+    else
+        HEADLESS=1 start fly "$REPO/scripts/fly"
+    fi
+
+    local waited=0
+    until gz service -l 2> /dev/null | grep -q '/create$'; do
+        sleep 2; waited=$((waited + 2))
+        if (( waited >= WORLD_WAIT_S )); then
+            echo "no Gazebo world after ${WORLD_WAIT_S} s, see $STATE_DIR/fly.log" >&2
+            cmd_down; exit 1
+        fi
+    done
+    echo "world ready after ${waited} s"
+
+    start sim_links "$REPO/scripts/sim_links"
+    sleep 5
+    start perception ros2 launch perception perception.launch.py overlay:=true
+    start geolocation ros2 launch geolocation geolocation.launch.py use_sim_time:=true
+    start tracking ros2 launch tracking tracking.launch.py use_sim_time:=true
+    start ui ros2 launch ui ui.launch.py use_sim_time:=true
+    sleep 15
+    "$REPO/Perception/scripts/spawn_person.sh" 5 0 0 > "$STATE_DIR/spawn_person.log" 2>&1 \
+        && echo "person spawned 5 m ahead" || echo "spawn_person failed, see $STATE_DIR/spawn_person.log"
+    if (( gui )); then
+        start debug_view vglrun -d egl ros2 run perception debug_view
+    fi
+    echo "up. Stop with: sim_stack down. Logs: $STATE_DIR/*.log"
+}
+
+cmd_status() {
+    local n any=0
+    for n in fly sim_links perception geolocation tracking ui debug_view; do
+        if running "$n"; then echo "$n: running (pid $(cat "$STATE_DIR/$n.pid"))"; any=1
+        elif [[ -f "$STATE_DIR/$n.pid" ]]; then echo "$n: stopped"; fi
+    done
+    (( any )) || echo "nothing running"
+}
+
+cmd_down() {
+    local n pid
+    for n in debug_view ui tracking geolocation perception sim_links fly; do
+        [[ -f "$STATE_DIR/$n.pid" ]] || continue
+        pid="$(cat "$STATE_DIR/$n.pid")"
+        kill -TERM -- "-$pid" 2> /dev/null || true
+        rm -f "$STATE_DIR/$n.pid"
+    done
+    sleep 5
+    # Anything that outlived its launcher (a launcher can exit before the node under it).
+    # Never kill ourselves or the shell that called us: skip every ancestor of this process.
+    local keep=" " p=$$ left
+    while [[ -n "$p" && "$p" != 0 && "$p" != 1 ]]; do
+        keep+="$p "; p="$(ps -o ppid= -p "$p" 2> /dev/null | tr -d ' ')"
+    done
+    left="$(pgrep -f "$LEFTOVER" | while read -r q; do [[ "$keep" == *" $q "* ]] || echo "$q"; done)"
+    [[ -z "$left" ]] || kill -TERM $left 2> /dev/null
+    sleep 3
+    ros2 daemon stop > /dev/null 2>&1   # the CLI daemon that ros2 commands against the stack start
+    left="$(pgrep -f "$LEFTOVER" | while read -r q; do [[ "$keep" == *" $q "* ]] || echo "$q"; done)"
+    if [[ -n "$left" ]]; then
+        echo "WARNING: processes left: $left" >&2; exit 1
+    fi
+    echo "down: no processes left"
+}
+
+case "${1:-}" in
+    up) shift; cmd_up "$@" ;;
+    status) cmd_status ;;
+    down) cmd_down ;;
+    *) usage ;;
+esac

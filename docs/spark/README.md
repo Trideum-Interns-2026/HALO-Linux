@@ -150,14 +150,19 @@ stops with *"HALO_DEV is not set"*, see section 4.
   (8080) — click the globe. Log in with user = your `HALO_DEV`, password =
   `SELKIES_BASIC_AUTH_PASSWORD` from your `.env` (auto-generated on first
   open). Page and video both ride that one forwarded port (Selkies 2.x
-  streams over a WebSocket), so there is nothing else to forward.
+  streams over a WebSocket). The groundstation dashboard is on **8000**
+  (`http://127.0.0.1:8000`, forwarded the same way); 8080 and 8000 are the
+  only web ports to forward.
 - **QGroundControl runs on your laptop**, with your own gamepad — over a
   TCP link, not the usual UDP one. Setup in section 7.
 - **`desktop`** re-runs the whole bring-up (Xvfb, Selkies, MAVLink bridge)
   in place if something died; it's idempotent.
-- **`fly`, `perceive`, `track`, `spawn_person`** work as before. `fly` and
-  `perceive` are wrapped in `vglrun -d egl` so Gazebo's OpenGL hits the
-  NVIDIA GPU rather than Xvfb's software renderer. If you launch `gz sim`
+- **Sim and services**: `fly` (PX4 SITL + Gazebo), `simlinks`, `perceive`,
+  `spawn_person`, `geolocation`, `tracking`, `movement`, `ui`,
+  `groundstation` (dashboard at http://127.0.0.1:8000), `sim_check`,
+  `sitl_vehicle`, `simstack up [--gui]|status|down`, `halo_test`.
+  `fly` and `perceive` are wrapped in `vglrun -d egl` so Gazebo's OpenGL hits
+  the NVIDIA GPU rather than Xvfb's software renderer. If you launch `gz sim`
   by hand, prefix it with `vglrun -d egl`.
 - **YOLO** goes to the shared Triton automatically (`HALO_TRITON_URL` is set
   in the container). To run the old in-process model instead, e.g. to
@@ -209,13 +214,14 @@ nothing is published on the Spark and nothing collides.
 1. Connect VS Code to the Spark and reopen your clone in the Spark dev
    container (section 5). The container's start script brings the MAVLink
    bridge up by itself.
-2. Check the *Ports* tab: you should see **Selkies desktop** (8080) and
-   **MAVLink → QGroundControl (laptop)** (5760). The second one must be
-   there for QGC to connect.
+2. Check the *Ports* tab: you should see **Selkies desktop** (8080),
+   **groundstation dashboard** (8000) and **MAVLink → QGroundControl
+   (laptop)** (5760). The last one must be there for QGC to connect.
 3. Open QGC. With auto-connect ticked it attaches to the link straight
    away, and says *Disconnected* until the sim is running — that's normal.
 4. In a container terminal run `fly`. Once PX4 is up the vehicle appears
-   in QGC; `perceive` and `track` follow as before.
+   in QGC. Start `perceive`, `geolocation`, `tracking` or `movement` in
+   further terminals as needed.
 
 ### If it doesn't connect
 

@@ -35,7 +35,7 @@ If the web API is down the node logs a throttled warning and keeps running.
 ## Run and test
 
 ```bash
-cd GroundstationAPI && uvicorn main:app        # terminal 1: web API on :8000
+groundstation                                   # terminal 1: web API and dashboard on 127.0.0.1:8000
 ui                                              # terminal 2 (alias for ros2 launch ui ui.launch.py)
 # in the sim add use_sim_time:=true, as for tracking
 

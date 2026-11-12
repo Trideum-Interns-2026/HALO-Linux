@@ -14,6 +14,8 @@ python -m pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
+In the dev container, `groundstation` runs this app on 127.0.0.1:8000 (same as `uvicorn main:app`).
+
 Open <http://127.0.0.1:8000> for the dashboard or
 <http://127.0.0.1:8000/docs> for interactive API documentation. Use
 `python -m pip install -r requirements-dev.txt` to install the test tools, then

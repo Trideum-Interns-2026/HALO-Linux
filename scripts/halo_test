@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Run every HALO test suite (no sim, GPU or Triton needed) and print one PASS/FAIL line per suite.
+#   halo_test            all suites
+#   halo_test <name>...  only those: scripts perception ui web ros
+# `ros` builds and tests geolocation, tracking and movement with colcon in /opt/ros2_ws.
+source /opt/ros/jazzy/setup.bash
+[[ -f /opt/px4_ros2/install/setup.bash ]] && source /opt/px4_ros2/install/setup.bash
+[[ -f /opt/ros2_ws/install/setup.bash ]] && source /opt/ros2_ws/install/setup.bash
+
+set -u   # after the ROS setup files, which are not nounset-safe
+REPO="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
+LOG_DIR="${HALO_TEST_LOG_DIR:-/tmp/halo-test}"
+mkdir -p "$LOG_DIR"
+SUITES=("$@")
+(( ${#SUITES[@]} )) || SUITES=(scripts perception ui web ros)
+failed=0
+
+run_suite() {  # run_suite <name> <command...>
+    local name="$1"; shift
+    if "$@" > "$LOG_DIR/$name.log" 2>&1; then
+        echo "PASS  $name   ($(tail -n 1 "$LOG_DIR/$name.log" | cut -c1-70))"
+    else
+        echo "FAIL  $name   (see $LOG_DIR/$name.log)"; failed=1
+    fi
+}
+
+ros_suite() {
+    cd /opt/ros2_ws \
+        && colcon build --packages-select perception_msgs geolocation_msgs tracking_msgs \
+            geolocation tracking movement ui --symlink-install \
+        && { set +u; source install/setup.bash; set -u; } \
+        && colcon test --packages-select geolocation_msgs tracking_msgs geolocation tracking \
+            movement ui \
+        && colcon test-result --verbose
+}
+
+for s in "${SUITES[@]}"; do
+    case "$s" in
+        scripts)    run_suite scripts python3 -m pytest "$REPO/scripts/tests" -q ;;
+        perception) run_suite perception python3 -m pytest "$REPO/Perception/test" -q ;;
+        ui)         run_suite ui python3 -m pytest "$REPO/UI/test" -q ;;
+        web)        run_suite web bash -c "cd '$REPO/GroundstationAPI' && python3 -m pytest -q" ;;
+        ros)        run_suite ros ros_suite ;;
+        *) echo "unknown suite: $s (scripts perception ui web ros)" >&2; exit 2 ;;
+    esac
+done
+exit "$failed"

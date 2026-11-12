@@ -2,18 +2,17 @@
 
 Follows a tracked person: keeps them centred in the camera and at a set distance, and scans for them
 when they are lost. It commands the vehicle only over MAVLink (MAVSDK offboard velocity), never through
-ROS. This is Lisa's `follow_person` controller ported as a service; the control math is unchanged
-(`include/movement/follow_logic.hpp`).
+ROS. The follow and orbit control math is in `include/movement/follow_logic.hpp`.
 
-Language: C++ (MAVSDK, control loop), as AGENTS.md recommends for this kind of component.
+Language: C++ (MAVSDK, control loop).
 Maintainer: Lisa.
 
 ## Behaviour
 
-Every 100 ms (`kLoopPeriod`) the node, in the original's order:
+Every 100 ms (`kLoopPeriod`) the node, in this order:
 1. Needs a live vehicle that is armed and in the air. It sends nothing otherwise. With
-   `auto_arm_takeoff:=true` it arms and takes off first, as the original did; the default is off,
-   so a human arms in QGroundControl (AGENTS.md "Safety and hardware readiness").
+   `auto_arm_takeoff:=true` it arms and takes off first; the default is off, so a human arms in
+   QGroundControl.
 2. Starts offboard: a zero velocity setpoint, then offboard mode.
 3. **Target seen** (tracking and drone position both newer than `target_timeout_ms`, drone heading
    known, camera intrinsics known; see "Input: tracked position"):
@@ -46,26 +45,24 @@ and the scan on target loss is unchanged. Off by default.
 
 The default lap is 30 s: at 6 m that is 1.26 m/s sideways, above the follow strafe limit
 (0.45 m/s), so orbit has its own cap (`max_orbit_speed_m_s`, default 1.5, hard cap 2.0). Follow and
-the scan keep their old limits. A tighter radius or a longer period lowers the speed; a lap that
+the scan keep the follow limits. A tighter radius or a longer period lowers the speed; a lap that
 would need more than the cap simply takes longer.
 
 ### Search around the last known direction
 
-With `last_known_search_s > 0` (default 0 = off, the original behaviour), losing the target no
-longer starts the spiral scan at once. The vehicle holds its position and sweeps its nose by
-`last_known_sweep_deg` (60) either side of where the person was last seen, at
-`last_known_rate_deg_s` (20), first toward the side they were drifting to (the pixel offset when it
-was off-centre, otherwise the last turn direction). Only yaw is commanded. If that finds nothing
-within `last_known_search_s`, the original spiral scan takes over, so it still never gives up
-(unless `search_timeout_s` says so). Seeing the person again ends it and follow or orbit resumes.
-The spiral drives away from the last known position and, at 25 deg/s, takes about 14 s per turn;
-this keeps the camera on the place the person vanished.
+With `last_known_search_s > 0` (default 0 = off), losing the target does not start the spiral scan
+at once. The vehicle holds its position and sweeps its nose by `last_known_sweep_deg` (60) either
+side of where the person was last seen, at `last_known_rate_deg_s` (20), first toward the side they
+were drifting to (the pixel offset when it was off-centre, otherwise the last turn direction). Only
+yaw is commanded. If that finds nothing within `last_known_search_s`, the spiral scan takes over, so
+it still never gives up (unless `search_timeout_s` says so). Seeing the person again ends it and
+follow or orbit resumes. The spiral drives away from the last known position and, at 25 deg/s, takes
+about 14 s per turn; this keeps the camera on the place the person vanished.
 
 ### Input: tracked position
 
 Movement follows Tracking's person position, not the camera image. Each control step it turns three
-inputs into the pixel column and range the controller already used, then runs the unchanged
-follow or orbit controller:
+inputs into the pixel column and range the controller uses, then runs the follow or orbit controller:
 
 - person: `/tracking/position` (`tracking_msgs/TrackingState`, LLA)
 - drone: `/geolocation/position` (`geolocation_msgs/GeolocationState`, LLA)
@@ -93,23 +90,19 @@ Rules:
   not refresh the target, so it goes stale and the search starts.
 - **Fresh** means tracking and geolocation were both received (node time, never the header stamp)
   within `target_timeout_ms`, the heading is known and `camera_info` is usable. Anything else runs
-  the lost-target search below, unchanged.
+  the lost-target search above.
 - The camera is assumed to face along the body axis (no mount-yaw parameter), so the heading is the
   camera heading. `camera_info` supplies only intrinsics (centre x, focal x, width).
 - The follow distance is the horizontal ground range to the tracked person.
 
-### Deliberate differences from the original
-
-Each is a bug or a repo-rule fix, and each has a test.
-- Offboard is restarted after a landing and new take-off (the original never cleared its flag).
+Other behaviour:
+- Offboard is restarted after a landing and new take-off.
 - Search speeds are clamped to the follow limits, and every limit has a hard cap in code
   (`follow_logic.hpp`), whatever the parameters say.
-- The MAVSDK URL is a parameter (default is the SITL value); camera topic and QoS follow the
-  Perception conventions; timing uses ROS time.
-- Arming and take-off are off by default (see above).
 - A lost vehicle link sends nothing and re-enters offboard when it returns.
-- `search_timeout_s` (default `0`, scan forever like the original) can hand back to Hold after that
-  long, until the target is seen again.
+- `search_timeout_s` (default `0`, scan forever) can hand back to Hold after that long, until the
+  target is seen again.
+- Timing uses ROS time; arming and take-off are off by default.
 
 ## Interface
 
@@ -151,16 +144,14 @@ No topics are published.
 | `orbit_clockwise` | `false` | direction, seen from above |
 | `max_orbit_speed_m_s` | `1.5` | sideways speed cap while orbiting (hard cap 2.0) |
 | `search_timeout_s` | `0.0` | `0` = scan until found; otherwise hand back to Hold after this long |
-| `auto_arm_takeoff` | `false` | arm and take off by itself, as the original did |
+| `auto_arm_takeoff` | `false` | arm and take off by itself; leave off, a human arms the vehicle |
 
 ## Run
 
 ```
-fly                                  # sim; arm and take off in QGroundControl
-perceive                             # camera bridge + detector (Tracking needs it)
-simlinks                             # GPS bridge for geolocation
-geolocation                          # drone position
-tracking                             # person position
+simstack up --gui                    # sim stack: fly, simlinks, perception, geolocation, tracking, ui
+                                     # (or start those by hand, see the root README)
+# arm and take off in QGroundControl, or: sitl_vehicle arm / sitl_vehicle takeoff 5
 movement                             # ros2 launch movement movement.launch.py
 ros2 run movement movement_node --ros-args -p safe_distance_m:=8.0
 ```
@@ -177,14 +168,13 @@ CI: `.github/workflows/movement-tests.yml`.
 
 ## Tuning
 
-The gains are parameters (defaults are Lisa's originals): `forward_gain`, `lateral_gain`,
-`yaw_gain`, `orbit_yaw_ki`, plus optional acceleration limits `max_forward_accel_m_s2`,
-`max_strafe_accel_m_s2`, `max_yaw_accel_deg_s2` (0 = off) that smooth the commands, and
-`command_smoothing_s` (low-pass time constant after those limits, 0 = off, at most 2 s) that rounds
-off the acceleration steps so jerk stays low. The low-pass only lags the command and never exceeds
-a speed or acceleration limit, but it adds delay to the control loop: too large a value makes the
-follower overshoot or lose the person, so change it only together with the gains (`movement_tune`
-scores that). Hard ceilings in `follow_logic.hpp` still apply.
+The gains are parameters: `forward_gain`, `lateral_gain`, `yaw_gain`, `orbit_yaw_ki`, plus optional
+acceleration limits `max_forward_accel_m_s2`, `max_strafe_accel_m_s2`, `max_yaw_accel_deg_s2` (0 = off)
+that smooth the commands, and `command_smoothing_s` (low-pass time constant after those limits,
+0 = off, at most 2 s) that rounds off the acceleration steps so jerk stays low. The low-pass only lags
+the command and never exceeds a speed or acceleration limit, but it adds delay to the control loop:
+too large a value makes the follower overshoot or lose the person, so change it only together with
+the gains (`movement_tune` scores that). Hard ceilings in `follow_logic.hpp` still apply.
 
 `config/sim_tuned.yaml` holds values tuned **for the simulator**, for smooth motion. Load it with
 `ros2 launch movement movement.launch.py params_file:=<path to config/sim_tuned.yaml>`
@@ -202,6 +192,5 @@ ros2 run movement movement_tune 1.0 0.35 0.5 20 0.3 0.3 30 0.2   # score one set
 ```
 
 The plant numbers at the top of `tools/tune_movement.cpp` (velocity and yaw lag, detection rate
-and latency) are assumptions: fit them to a flight trace (`sitl_vehicle trace`) and rerun. Finding:
-the original forward gain 0.35 cannot hold range on a person walking at 0.5 m/s (P-only, steady lag
-about 1.4 m); 0.5 can.
+and latency) are assumptions: fit them to a flight trace and rerun. Finding: the P-only forward gain
+0.35 cannot hold range on a person walking at 0.5 m/s (steady lag about 1.4 m); 0.5 can.

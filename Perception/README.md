@@ -1,8 +1,8 @@
 # perception
 
 Finds the person in each camera frame using the shared Triton YOLO server, and publishes it as a
-`perception_msgs/Detection`. Built for 30 Hz: a running person moves about 15 cm between frames at
-30 Hz (30 cm at 15 Hz), and Tracking and Movement cannot use more than that.
+`perception_msgs/Detection`. It runs at the camera rate (30 Hz in sim): a running person moves about
+15 cm between frames, and the per-frame budget is 33 ms.
 
 ## Interface
 
@@ -34,9 +34,9 @@ Finds the person in each camera frame using the shared Triton YOLO server, and p
 | `image_reliability` | `reliable` | `reliable` or `best_effort`; must match the camera publisher |
 
 Why the image is reliable: a 1920x1080 frame is 6 MB, fragmented over UDP. A best-effort reader
-lost whole frames and saw about 4 Hz of the sim camera's 15 Hz (so detections came at 3.5 Hz); a
-reliable depth-1 reader gets all 15 Hz. A reliable reader cannot connect to a best-effort
-publisher, so set `image_reliability:=best_effort` for a camera driver that publishes that way.
+drops whole frames when a fragment is lost, so the reader is reliable with depth 1 and gets every
+frame the camera sends. A reliable reader cannot connect to a best-effort publisher, so set
+`image_reliability:=best_effort` for a camera driver that publishes that way.
 
 ## Detection overlay (debug view)
 
@@ -71,13 +71,30 @@ raw image. `sim_check --gui` starts the overlay and `debug_view` for you.
 ## Run
 
 ```
-fly                                   # terminal 1: sim
-perceive                              # terminal 2: bridge + node (ros2 launch perception perception.launch.py)
+simstack up --gui                     # whole sim stack (or: fly, then perceive in a second terminal)
+perceive                              # bridge + node (ros2 launch perception perception.launch.py)
 spawn_person                          # optional: a person 5 m ahead
 ros2 topic echo /perception/detection
 ```
 
 Override a parameter: `ros2 run perception yolo_person_detector --ros-args -p min_confidence:=0.8`
+
+## Sim helpers: walk the standing person
+
+Sim only. Both scripts move a person that is already in the Gazebo world, through Gazebo services.
+No node calls them. They find the world name from `gz service -l` (set `WORLD` to override). Each
+opens a "Walk" window: keep it focused while you drive. Run them with `/usr/bin/python3`, not a
+virtualenv. They need `python3-tk`, and `python3-protobuf` for smooth updates.
+
+- `Perception/scripts/walk_person.py [x] [y] [yaw]` moves the `standing_person` that `spawn_person`
+  put in the world. That model is one frozen pose with no animation, so he glides. Spawn first and
+  pass the same `x y yaw` (defaults `5 0 0`). Keys: W/S forward/back, A/D turn, Q/E sidestep,
+  Shift run, X or Esc quit.
+- `Perception/scripts/walk_actor.py [x] [y] [yaw]` spawns an animated walking person (`walking_person`,
+  a Gazebo actor) and drives the target it follows (defaults `5 0 0`). Keys: W/S walk forward or back,
+  A/D turn (alone: he turns on the spot), Q/E sidestep, X or Esc quit (he stays in the world). It has no
+  run key. It removes any `standing_person` first. Gazebo cannot remove actors, so a second run reuses
+  him and walks him to the start point; restart the sim for a fresh one.
 
 ## Measure and tune (30 Hz budget = 33 ms per frame)
 

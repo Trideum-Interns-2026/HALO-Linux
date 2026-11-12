@@ -27,10 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# MAVSDK C++ SDK — installed as a prebuilt .deb so the Movement/
-# Tracking_Geolocation C++ test programs (run_all.py) can be built and run
-# directly inside this container via CMake. This base image is Ubuntu 24.04
-# (Noble), not the 20.04 (Focal) the old Dockerfile targeted.
+# MAVSDK C++ SDK — installed as a prebuilt .deb so Movement/ and Src/move.cpp can be built
+# inside this container via CMake. This base image is Ubuntu 24.04 (Noble).
 #
 # TARGETARCH is set automatically by buildx (the default builder since
 # Docker Engine 23 / current Docker Compose) to whatever arch is actually
@@ -83,4 +81,4 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # ~15 cm per frame at 30 Hz, ~30 cm at 15 Hz), so the model's own <update_rate> is left
 # alone. An earlier build capped it to 15 Hz here with sed; to go back, add that sed again.
 
-WORKDIR /workspace
+WORKDIR /workspace
