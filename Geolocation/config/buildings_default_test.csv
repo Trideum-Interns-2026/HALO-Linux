@@ -1,0 +1,4 @@
+id,latitude_deg,longitude_deg,radius_m,base_alt_m,height_m
+test_north,47.397832,8.545594,8,488,12
+test_east,47.397742,8.545727,8,488,16
+test_southwest,47.397678,8.545503,6,488,10

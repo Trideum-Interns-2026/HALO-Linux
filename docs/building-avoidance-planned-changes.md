@@ -1,16 +1,14 @@
 # Building avoidance: planned changes (for Brooks)
 
-Status: PLAN ONLY. Nothing below is implemented except the message file (see "Already in the working tree").
+Status: Geolocation portion implemented; Movement and repo-wide integration remain.
 Author: Cohen, 2026-11-16. Reviewers: Brooks (Geolocation), Lisa (Movement).
 
 ## Hand-off
 
-- Branch: `city-map`. Uncommitted: this file, `geolocation_msgs/msg/BuildingRisk.msg`, and one line in
-  `geolocation_msgs/CMakeLists.txt`. No other code is written, so nothing needs reverting.
-- Brooks: please answer "Needs Brooks's confirmation" (6 items) before anyone builds on the message.
-  If the name, fields or scope change, edit or delete the `.msg` first; nothing consumes it yet.
-- Lisa: please answer the three questions under "Movement".
-- Then the plan below can be implemented as written (Geolocation, then Movement, then docs and scripts).
+- Brooks's decisions are recorded below. The Geolocation node, pure logic, placeholder CSVs, tests,
+  launch integration, and README update are implemented and pass package tests.
+- Lisa: please answer the three questions under "Movement" before implementing Movement.
+- Movement and repo-wide documentation/script integration remain to be implemented.
 
 ## Summary
 
@@ -18,19 +16,19 @@ Building avoidance follows the existing service boundary. Geolocation turns the 
 uncertainty plus building data into an overlap probability. Movement turns that probability into a bounded
 velocity bias. The only interface between them is one new topic.
 
-## Needs Brooks's confirmation (not confirmed yet)
+## Brooks's decisions
 
-1. Message name `geolocation_msgs/BuildingRisk` and topic `/geolocation/building_risk`. AGENTS.md lists
-   exact names for Geolocation as an open question. We proceed on these names and flag them in the PR.
-2. Building risk lives in Geolocation as a second node (`building_risk_node`). Its only inputs are
-   `/geolocation/position` and building data; it uses no perception or Tracking data.
-3. `error_x_m` / `error_y_m` are ECEF axes, not local east/north. At Huntsville's latitude ECEF z carries part
-   of the north error, so RMS(x, y) / 3 understates it. Acceptable for now, or rotate to ENU first?
-4. Roof comparison: `altitude_m` is above the WGS84 ellipsoid. Proposal: the CSV gets a `base_alt_m` column
-   (roof = base_alt_m + height_m). Vertical bound = `error_z_m`. OK?
-5. `building_distance_m` is measured to the nearest disc edge (0 inside). Default "in range" radius is 200 m.
-   OK?
-6. DTED level and footprint layer (e.g. OSM) are undecided. Who supplies real footprints for Huntsville?
+1. Use message `geolocation_msgs/BuildingRisk` and topic `/geolocation/building_risk`.
+2. Keep building-risk estimation in a second Geolocation node. It uses only Geolocation position and
+   building data, not perception or Tracking data.
+3. Rotate the per-axis ECEF bounds into local ENU before deriving horizontal sigma. The estimate
+   assumes independent ECEF axes because the message does not carry covariance terms.
+4. Compare the lowest 3-sigma altitude (`altitude_m - error_z_m`) with roof altitude
+   (`base_alt_m + height_m`), both referenced to the WGS84 ellipsoid.
+5. Measure horizontal distance to the nearest disc edge (zero inside), with a 200 m default range.
+6. Real Huntsville data is deferred. The checked-in CSVs are explicitly synthetic placeholders;
+   DTED level, authoritative footprint source, and data supplier must be decided before using real
+   building data.
 
 ## Message: `geolocation_msgs/msg/BuildingRisk.msg`
 
@@ -51,7 +49,8 @@ New C++ node in the existing ament_cmake package (no language change).
 - `Geolocation/include/geolocation/building_occlusion.hpp`, pure logic, no ROS calls:
   - `BuildingFootprint` (disc: id, lat, lon, radius_m, base_alt_m, height_m), `BuildingRiskEstimate`,
     `loadBuildingFootprints(path)` (skips bad rows, missing file gives empty list).
-  - Horizontal sigma = RMS(error_x_m, error_y_m) / 3, isotropic Gaussian.
+  - Rotate the independent ECEF 3-sigma bounds into ENU, then use the RMS of east/north standard
+    deviations as the isotropic horizontal Gaussian sigma.
   - Overlap probability = closed-form circular Gaussian `exp(-c^2 / 2 sigma^2)`, c = clearance to the disc edge;
     1.0 inside the disc.
   - A building is excluded if the drone clears its roof even at the lowest 3-sigma altitude bound.
@@ -63,9 +62,8 @@ New C++ node in the existing ament_cmake package (no language change).
   courthouse square. `Geolocation/config/buildings_default_test.csv`: 3 discs near PX4's default Gazebo home
   for the default-world SITL test.
 - `CMakeLists.txt`, `package.xml`, `launch/geolocation.launch.py` (starts the second node), `README.md`.
-- Tests: `test/test_building_occlusion.cpp` (about 20 logic cases), `test/test_building_risk_node.cpp`
-  (7 node cases: header copied, values, nothing published when none in range, missing file, non-finite input,
-  parameter defaults).
+- Tests: `test/test_building_occlusion.cpp` (13 test cases), `test/test_building_risk_node.cpp`
+  (5 test cases covering header/values, no nearby building, missing file, invalid input, and defaults).
 
 ## Movement (Lisa)
 
@@ -106,15 +104,16 @@ Questions for Lisa:
 
 ## Already in the working tree
 
-- `geolocation_msgs/msg/BuildingRisk.msg` (new) and its entry in `geolocation_msgs/CMakeLists.txt`.
-  Built with colcon. Nothing else is written.
+- `geolocation_msgs/msg/BuildingRisk.msg` and its entry in `geolocation_msgs/CMakeLists.txt`.
+- Geolocation node and tests are implemented; Movement remains pending Lisa's decisions.
 - Container note: colcon builds in this container need
   `PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages` (the CMake template step cannot import `ament_package`
   otherwise).
 
 ## Next steps
 
-1. Brooks answers the questions above; Lisa answers hers.
-2. Implement Geolocation, then Movement, then AGENTS.md and script updates.
-3. Run the unit tests, the safety review, and the default-world SITL check.
-4. Later: replace the disc CSV with DTED + a footprint layer (loader and overlap test only).
+1. Lisa answers the Movement questions.
+2. Implement Movement, then update AGENTS.md and affected scripts/docs.
+3. Run all unit tests, the Movement safety review, and the default-world SITL check.
+4. Later: decide real terrain/footprint sources and replace the disc CSV through the loader and
+   overlap-test boundary.

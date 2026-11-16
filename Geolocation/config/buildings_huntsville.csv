@@ -1,0 +1,7 @@
+id,latitude_deg,longitude_deg,radius_m,base_alt_m,height_m
+placeholder_courthouse,34.7304,-86.5861,18,190,28
+placeholder_north,34.7340,-86.5861,14,190,18
+placeholder_east,34.7304,-86.5817,16,190,22
+placeholder_south,34.7268,-86.5861,12,190,16
+placeholder_west,34.7304,-86.5905,15,190,24
+placeholder_northeast,34.7330,-86.5828,10,190,14

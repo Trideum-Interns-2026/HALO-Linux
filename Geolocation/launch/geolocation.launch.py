@@ -8,8 +8,12 @@ from launch_ros.actions import Node
 
 def make_node(context):
     params_file = LaunchConfiguration("params_file").perform(context)
-    return [Node(package="geolocation", executable="geolocation_node", name="geolocation",
-                 output="screen", parameters=[params_file] if params_file else [])]
+    return [
+        Node(package="geolocation", executable="geolocation_node", name="geolocation",
+             output="screen", parameters=[params_file] if params_file else []),
+        Node(package="geolocation", executable="building_risk_node", name="building_risk",
+             output="screen"),
+    ]
 
 
 def generate_launch_description():
