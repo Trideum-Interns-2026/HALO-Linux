@@ -7,7 +7,6 @@
   <maintainer email="cohen.hill@ascte.org">Cohen Hill</maintainer>
   <license>Apache-2.0</license>
 
-  <depend>ament_index_cpp</depend>
   <depend>geolocation_msgs</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
