@@ -483,10 +483,8 @@ TEST(Synthesize, FollowAndOrbitCommandsStayWithinEveryLimitForASweepOfTargets) {
     FollowParams defaults;
     FollowParams wild;
     wild.max_forward_m_s = 1e9;
-    wild.max_strafe_m_s = 1e9;
     wild.max_yaw_rate_deg_s = 1e9;
     wild.forward_gain = 1e9;
-    wild.lateral_gain = 1e9;
     wild.yaw_gain = 1e9;
     wild.orbit_yaw_ki = 1e9;
     wild.min_distance_m = -1e9;
@@ -518,10 +516,9 @@ TEST(Synthesize, FollowAndOrbitCommandsStayWithinEveryLimitForASweepOfTargets) {
                             computeFollowCommand(s->x_px, s->distance_m, cam, p);
                         EXPECT_TRUE(std::isfinite(f.forward_m_s));
                         EXPECT_LE(std::fabs(f.forward_m_s), p.max_forward_m_s + 1e-12);
-                        EXPECT_LE(std::fabs(f.right_m_s), p.max_strafe_m_s + 1e-12);
+                        EXPECT_DOUBLE_EQ(f.right_m_s, 0.0);
                         EXPECT_LE(std::fabs(f.yawspeed_deg_s), p.max_yaw_rate_deg_s + 1e-12);
                         EXPECT_LE(std::fabs(f.forward_m_s), kForwardSpeedCeilingMps);
-                        EXPECT_LE(std::fabs(f.right_m_s), kStrafeSpeedCeilingMps);
                         EXPECT_LE(std::fabs(f.yawspeed_deg_s), kYawRateCeilingDegS);
                         if (!s->distance_m) {
                             // No range: never any forward motion.

@@ -242,14 +242,15 @@ Score score(const FollowParams& p, const OrbitParams& o) {
 int main(int argc, char** argv) {
     const OrbitParams orbit = sanitize(OrbitParams{true, false, kDefaultOrbitPeriodS,
                                                    kDefaultOrbitSpeedMps});
-    // movement_tune yaw lateral forward ki a_fwd a_strafe a_yaw [smoothing_s]  -> score it
-    if (argc == 8 || argc == 9) {
+    // movement_tune yaw forward ki a_fwd a_strafe a_yaw [smoothing_s] -> score it
+    if (argc == 7 || argc == 8) {
         FollowParams p;
-        p.yaw_gain = std::atof(argv[1]); p.lateral_gain = std::atof(argv[2]);
-        p.forward_gain = std::atof(argv[3]); p.orbit_yaw_ki = std::atof(argv[4]);
-        p.max_forward_accel_m_s2 = std::atof(argv[5]); p.max_strafe_accel_m_s2 = std::atof(argv[6]);
-        p.max_yaw_accel_deg_s2 = std::atof(argv[7]);
-        if (argc == 9) p.command_smoothing_s = std::atof(argv[8]);
+        p.yaw_gain = std::atof(argv[1]); p.forward_gain = std::atof(argv[2]);
+        p.orbit_yaw_ki = std::atof(argv[3]);
+        p.max_forward_accel_m_s2 = std::atof(argv[4]);
+        p.max_strafe_accel_m_s2 = std::atof(argv[5]);
+        p.max_yaw_accel_deg_s2 = std::atof(argv[6]);
+        if (argc == 8) p.command_smoothing_s = std::atof(argv[7]);
         const Score s = score(sanitize(p), orbit);
         std::printf("score %.2f  %s%s\n", s.value, s.ok ? "ok" : "FAILS: ", s.why.c_str());
         return s.ok ? 0 : 1;
@@ -262,7 +263,6 @@ int main(int argc, char** argv) {
     struct Candidate { double value; FollowParams p; };
     std::vector<Candidate> good;
     const double yaw_gains[] = {0.3, 0.45, 0.6, 0.8, 1.0};
-    const double lateral_gains[] = {0.2, 0.35, 0.5, 0.7};
     const double forward_gains[] = {0.2, 0.35, 0.5, 0.7, 1.0};
     const double kis[] = {5.0, 10.0, 20.0, 30.0, 45.0};
     const double fwd_acc[] = {0.15, 0.3, 0.5, 1.0, 0.0};
@@ -270,11 +270,11 @@ int main(int argc, char** argv) {
     const double yaw_acc[] = {15.0, 30.0, 60.0, 120.0, 0.0};
     const double smoothing[] = {0.0, 0.1, 0.2, 0.3};
     long tried = 0;
-    for (double yg : yaw_gains) for (double lg : lateral_gains) for (double fg : forward_gains)
+    for (double yg : yaw_gains) for (double fg : forward_gains)
     for (double ki : kis) for (double fa : fwd_acc) for (double sa : strafe_acc)
     for (double ya : yaw_acc) for (double sm : smoothing) {
         FollowParams p;
-        p.yaw_gain = yg; p.lateral_gain = lg; p.forward_gain = fg; p.orbit_yaw_ki = ki;
+        p.yaw_gain = yg; p.forward_gain = fg; p.orbit_yaw_ki = ki;
         p.max_forward_accel_m_s2 = fa; p.max_strafe_accel_m_s2 = sa; p.max_yaw_accel_deg_s2 = ya;
         p.command_smoothing_s = sm;
         p = sanitize(p);
@@ -285,12 +285,12 @@ int main(int argc, char** argv) {
     std::sort(good.begin(), good.end(),
               [](const Candidate& a, const Candidate& b) { return a.value < b.value; });
     std::printf("tried %ld combinations, %zu keep the person centred\n", tried, good.size());
-    std::printf("%-9s %-5s %-5s %-5s %-4s %-5s %-5s %-5s %-5s\n", "score", "yaw", "lat", "fwd", "ki",
+    std::printf("%-9s %-5s %-5s %-4s %-5s %-5s %-5s %-5s\n", "score", "yaw", "fwd", "ki",
                 "a_fwd", "a_str", "a_yaw", "tau");
     for (size_t i = 0; i < std::min<size_t>(good.size(), 8); ++i) {
         const auto& g = good[i];
-        std::printf("%-9.1f %-5.2f %-5.2f %-5.2f %-4.0f %-5.1f %-5.1f %-5.0f %-5.2f\n", g.value,
-                    g.p.yaw_gain, g.p.lateral_gain, g.p.forward_gain, g.p.orbit_yaw_ki,
+        std::printf("%-9.1f %-5.2f %-5.2f %-4.0f %-5.1f %-5.1f %-5.0f %-5.2f\n", g.value,
+                    g.p.yaw_gain, g.p.forward_gain, g.p.orbit_yaw_ki,
                     g.p.max_forward_accel_m_s2, g.p.max_strafe_accel_m_s2,
                     g.p.max_yaw_accel_deg_s2, g.p.command_smoothing_s);
     }

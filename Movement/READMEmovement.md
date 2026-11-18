@@ -1,8 +1,8 @@
 # movement
 
-Follows a tracked person: keeps them centred in the camera and at a set distance, and scans for them
-when they are lost. It commands the vehicle only over MAVLink (MAVSDK offboard velocity), never through
-ROS. The follow and orbit control math is in `include/movement/follow_logic.hpp`.
+Follows a tracked person: turns to centre them, approaches or retreats to a safe distance, and holds
+position while scanning if tracking is lost. It commands the vehicle only over MAVLink (MAVSDK
+offboard velocity), never through ROS. The control math is in `include/movement/follow_logic.hpp`.
 
 Language: C++ (MAVSDK, control loop).
 Maintainer: Lisa.
@@ -16,22 +16,23 @@ Every 100 ms (`kLoopPeriod`) the node, in this order:
 2. Starts offboard: a zero velocity setpoint, then offboard mode.
 3. **Target seen** (tracking and drone position both newer than `target_timeout_ms`, drone heading
    known, camera intrinsics known; see "Input: tracked position"):
-   - `normalized` = horizontal offset of the person from the image centre, scaled to -1..1
-   - yaw rate = `normalized * max_yaw_rate_deg_s`
-   - strafe (right) = `0.7 * normalized * max_strafe_m_s`
-   - forward = `(distance - safe_distance_m) * 0.35`, capped at `max_forward_m_s`, with the distance
-     first clamped to `[min_distance_m, max_distance_m]`; no valid distance means no forward motion
-4. **Target lost**: spiral scan. Forward `0.8 * search_forward_m_s`, strafe
-   `sin(2 pi * search_orbit_hz * t) * search_strafe_m_s`, yaw `search_yaw_rate_deg_s`, with `t` the
-   time since the scan began. It scans until the target returns.
+   - If the person is more than 3% of the image half-width from centre, turn in place to face them.
+     No forward or sideways movement is commanded while turning.
+   - Once centred, move forward or backward to hold `safe_distance_m`. Ignore distance errors within
+     0.3 m to prevent small range fluctuations from causing constant motion. Speed is capped at
+     `max_forward_m_s`, with distance first clamped to `[min_distance_m, max_distance_m]`.
+   - No valid range means no forward movement.
+4. **Target lost**: hold position and yaw at `search_yaw_rate_deg_s` until the target returns. If
+   `last_known_search_s` is enabled, first sweep around the last known direction, then continue the
+   in-place yaw scan.
 5. Sends the result as a body-frame velocity (altitude is never commanded).
 
 On Ctrl+C or exit it leaves offboard, which returns PX4 to Hold.
 
 ### Orbit mode
 
-With `orbit_enabled:=true` (launch: `orbit:=true`) a person in view is circled instead of followed,
-and the scan on target loss is unchanged. Off by default.
+With `orbit_enabled:=true` (launch: `orbit:=true`) a person in view is circled instead of held in
+place. This mode intentionally moves sideways; it is off by default.
 
 - **Radius** is `safe_distance_m`, held with the same forward law as follow.
 - **Speed** is sideways, `2 pi r / orbit_period_s`, capped by `max_orbit_speed_m_s`.
@@ -43,21 +44,17 @@ and the scan on target loss is unchanged. Off by default.
   integral is cleared whenever the target is lost.
 - Without a valid range it only keeps the person centred (no orbit motion).
 
-The default lap is 30 s: at 6 m that is 1.26 m/s sideways, above the follow strafe limit
-(0.45 m/s), so orbit has its own cap (`max_orbit_speed_m_s`, default 1.5, hard cap 2.0). Follow and
-the scan keep the follow limits. A tighter radius or a longer period lowers the speed; a lap that
-would need more than the cap simply takes longer.
+The default lap is 30 s: at 6 m that is 1.26 m/s sideways. Orbit has its own cap
+(`max_orbit_speed_m_s`, default 1.5, hard cap 2.0). A tighter radius or a longer period lowers the
+speed; a lap that would need more than the cap simply takes longer.
 
 ### Search around the last known direction
 
-With `last_known_search_s > 0` (default 0 = off), losing the target does not start the spiral scan
-at once. The vehicle holds its position and sweeps its nose by `last_known_sweep_deg` (60) either
-side of where the person was last seen, at `last_known_rate_deg_s` (20), first toward the side they
-were drifting to (the pixel offset when it was off-centre, otherwise the last turn direction). Only
-yaw is commanded. If that finds nothing within `last_known_search_s`, the spiral scan takes over, so
-it still never gives up (unless `search_timeout_s` says so). Seeing the person again ends it and
-follow or orbit resumes. The spiral drives away from the last known position and, at 25 deg/s, takes
-about 14 s per turn; this keeps the camera on the place the person vanished.
+With `last_known_search_s > 0` (default 0 = off), losing the target first sweeps the nose by
+`last_known_sweep_deg` (60) either side of where the person was last seen, at
+`last_known_rate_deg_s` (20), initially toward the side they were drifting to. Only yaw is
+commanded. If that finds nothing within `last_known_search_s`, the in-place yaw scan takes over.
+Seeing the person again ends the search and resumes following.
 
 ### Input: tracked position
 
@@ -76,10 +73,8 @@ Synthesis (`include/movement/target_geometry.hpp`):
 
 Rules:
 - **Out of view**: the range is given only while the column is inside the image. A target behind or
-  beside the drone gets no range, so in follow mode it only yaws (forward and strafe are not
-  commanded: `min_distance_m` cannot be enforced without a range). With the acceleration limits and
-  smoothing of `config/sim_tuned.yaml` the forward speed left over from before decays to zero over
-  about 2.5 s after a target swings behind; it never increases. Orbit mode is unchanged.
+  beside the drone gets no range, so follow mode only yaws toward them; forward movement requires a
+  valid range. Orbit mode is unchanged.
 - **Heading freshness**: the MAVSDK attitude timestamp must keep advancing. If it stops for longer
   than `heading_timeout_s` (the stream died while the link stayed up) the heading counts as
   unknown and the lost-target search runs; a new link also starts without a heading.
@@ -97,8 +92,8 @@ Rules:
 
 Other behaviour:
 - Offboard is restarted after a landing and new take-off.
-- Search speeds are clamped to the follow limits, and every limit has a hard cap in code
-  (`follow_logic.hpp`), whatever the parameters say.
+- Search yaw and every movement limit have a hard cap in code (`follow_logic.hpp`), whatever the
+  parameters say.
 - A lost vehicle link sends nothing and re-enters offboard when it returns.
 - `search_timeout_s` (default `0`, scan forever) can hand back to Hold after that long, until the
   target is seen again.
@@ -129,14 +124,10 @@ No topics are published.
 | `safe_distance_m` | `6.0` | distance to hold from the person |
 | `min_distance_m` / `max_distance_m` | `4.0` / `9.0` | clamp applied to the measured distance (hard caps 2 / 30) |
 | `max_forward_m_s` | `0.7` | forward speed limit (hard cap 2.0) |
-| `max_strafe_m_s` | `0.45` | sideways speed limit (hard cap 1.5) |
 | `max_yaw_rate_deg_s` | `45.0` | yaw rate limit (hard cap 90) |
 | `target_timeout_ms` | `800` | a tracking or geolocation message older than this counts as lost |
-| `search_yaw_rate_deg_s` | `25.0` | yaw rate while scanning |
-| `search_forward_m_s` | `0.35` | scan forward speed (times 0.8) |
-| `search_strafe_m_s` | `0.45` | scan sideways amplitude |
-| `search_orbit_hz` | `0.25` | scan sideways frequency (max 1) |
-| `last_known_search_s` | `0.0` | time to sweep around the last known direction before the spiral (0 = off, max 60) |
+| `search_yaw_rate_deg_s` | `25.0` | yaw rate while scanning in place |
+| `last_known_search_s` | `0.0` | time to sweep around the last known direction before scanning (0 = off, max 60) |
 | `last_known_sweep_deg` | `60.0` | sweep half-angle (max 180) |
 | `last_known_rate_deg_s` | `20.0` | sweep yaw rate (capped at `max_yaw_rate_deg_s`) |
 | `orbit_enabled` | `false` | circle the person instead of following |
@@ -168,7 +159,7 @@ CI: `.github/workflows/movement-tests.yml`.
 
 ## Tuning
 
-The gains are parameters: `forward_gain`, `lateral_gain`, `yaw_gain`, `orbit_yaw_ki`, plus optional
+The gains are parameters: `forward_gain`, `yaw_gain`, `orbit_yaw_ki`, plus optional
 acceleration limits `max_forward_accel_m_s2`, `max_strafe_accel_m_s2`, `max_yaw_accel_deg_s2` (0 = off)
 that smooth the commands, and `command_smoothing_s` (low-pass time constant after those limits,
 0 = off, at most 2 s) that rounds off the acceleration steps so jerk stays low. The low-pass only lags
@@ -188,7 +179,7 @@ on time, on slow, nominal and fast vehicle models:
 
 ```bash
 ros2 run movement movement_tune              # search
-ros2 run movement movement_tune 1.0 0.35 0.5 20 0.3 0.3 30 0.2   # score one set: yaw lat fwd ki a_fwd a_str a_yaw [smoothing_s]
+ros2 run movement movement_tune 1.0 0.5 20 0.3 0.3 30 0.2   # yaw fwd ki a_fwd a_str a_yaw [smoothing_s]
 ```
 
 The plant numbers at the top of `tools/tune_movement.cpp` (velocity and yaw lag, detection rate

@@ -157,19 +157,14 @@ TEST_F(NodeTest, ParameterDefaultsAreTheOriginalControllersAndSafe) {
     EXPECT_DOUBLE_EQ(node->get_parameter("min_distance_m").as_double(), 4.0);
     EXPECT_DOUBLE_EQ(node->get_parameter("max_distance_m").as_double(), 9.0);
     EXPECT_DOUBLE_EQ(node->get_parameter("max_forward_m_s").as_double(), 0.7);
-    EXPECT_DOUBLE_EQ(node->get_parameter("max_strafe_m_s").as_double(), 0.45);
     EXPECT_DOUBLE_EQ(node->get_parameter("max_yaw_rate_deg_s").as_double(), 45.0);
     EXPECT_EQ(node->get_parameter("target_timeout_ms").as_int(), 800);
     EXPECT_DOUBLE_EQ(node->get_parameter("search_yaw_rate_deg_s").as_double(), 25.0);
-    EXPECT_DOUBLE_EQ(node->get_parameter("search_forward_m_s").as_double(), 0.35);
-    EXPECT_DOUBLE_EQ(node->get_parameter("search_strafe_m_s").as_double(), 0.45);
-    EXPECT_DOUBLE_EQ(node->get_parameter("search_orbit_hz").as_double(), 0.25);
     EXPECT_EQ(node->get_parameter("camera_info_topic").as_string(),
               "/camera/front/camera_info");
     EXPECT_FALSE(node->get_parameter("auto_arm_takeoff").as_bool());
     EXPECT_DOUBLE_EQ(node->get_parameter("search_timeout_s").as_double(), 0.0);
     EXPECT_DOUBLE_EQ(node->get_parameter("forward_gain").as_double(), 0.35);
-    EXPECT_DOUBLE_EQ(node->get_parameter("lateral_gain").as_double(), 0.7);
     EXPECT_DOUBLE_EQ(node->get_parameter("yaw_gain").as_double(), 1.0);
     EXPECT_DOUBLE_EQ(node->get_parameter("orbit_yaw_ki").as_double(), 30.0);
     EXPECT_DOUBLE_EQ(node->get_parameter("max_forward_accel_m_s2").as_double(), 0.0);
@@ -330,13 +325,13 @@ TEST_F(NodeTest, CentredPersonAtSafeDistanceCommandsNoMotion) {
     EXPECT_NEAR(fake.velocities[0].yaw, 0.0F, 1e-6);
 }
 
-TEST_F(NodeTest, OffCentreAndTooFarMatchesTheOriginalFormulas) {
+TEST_F(NodeTest, OffCentreTargetTurnsInPlaceBeforeApproaching) {
     node->onCameraInfo(cameraInfo());
     personAtPixel(*node, 1440.0, 7.0, t(1.0));  // half right, 1 m too far
     node->tick(t(1.1));
     ASSERT_EQ(fake.velocities.size(), 1U);
-    EXPECT_NEAR(fake.velocities[0].forward, 0.35F, 1e-4);
-    EXPECT_NEAR(fake.velocities[0].right, 0.1575F, 1e-5);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
     EXPECT_NEAR(fake.velocities[0].yaw, 22.5F, 1e-4);
 }
 
@@ -363,13 +358,13 @@ TEST_F(NodeTest, TargetAtExactlyTheTimeoutIsStillFollowed) {
 }
 
 TEST_F(NodeTest, TargetWithoutCameraInfoCountsAsNotFreshAndTheScanRuns) {
-    // Replaces the old "holding position without camera_info" branch, which is gone: without a
-    // usable camera there is no target, so the existing lost-target path (the scan) runs.
+    // Without usable camera calibration there is no target, so the in-place scan runs.
     personAtPixel(*node, 1440.0, 9.0, t(1.0));
     node->tick(t(1.1));
     ASSERT_EQ(fake.velocities.size(), 1U);
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities[0].forward, 0.28F, 1e-6);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
     EXPECT_NEAR(fake.velocities[0].yaw, 25.0F, 1e-6);
 }
 
@@ -379,7 +374,8 @@ TEST_F(NodeTest, CameraInfoArrivingLaterIsUsedOnTheNextTick) {
     node->onCameraInfo(cameraInfo());
     personAtPixel(*node, 1440.0, 7.0, t(1.2));
     node->tick(t(1.3));
-    EXPECT_NEAR(fake.velocities.back().forward, 0.35F, 1e-4);
+    EXPECT_FLOAT_EQ(fake.velocities.back().forward, 0.0F);
+    EXPECT_GT(fake.velocities.back().yaw, 0.0F);
     EXPECT_FALSE(node->searching());
 }
 
@@ -496,15 +492,14 @@ TEST_F(NodeTest, FailedVelocityCommandDoesNotCrash) {
 
 TEST_F(NodeTest, ParametersCannotExceedHardCaps) {
     FakeState f;
-    auto n = make({{"max_forward_m_s", 99.0}, {"max_strafe_m_s", 99.0},
-                   {"max_yaw_rate_deg_s", 9999.0}},
+    auto n = make({{"max_forward_m_s", 99.0}, {"max_yaw_rate_deg_s", 9999.0}},
                   &f);
     n->onCameraInfo(cameraInfo());
     personAtPixel(*n, 1920.0, 9.0, t(1.0));
     n->tick(t(1.1));
     ASSERT_EQ(f.velocities.size(), 1U);
     EXPECT_LE(f.velocities[0].forward, kForwardSpeedCeilingMps + 1e-6);
-    EXPECT_LE(f.velocities[0].right, kStrafeSpeedCeilingMps + 1e-6);
+    EXPECT_FLOAT_EQ(f.velocities[0].right, 0.0F);
     EXPECT_LE(f.velocities[0].yaw, kYawRateCeilingDegS + 1e-6);
 }
 
@@ -525,10 +520,10 @@ TEST_F(NodeTest, FollowsFromTrackingGeolocationAndHeading) {
     EXPECT_FLOAT_EQ(fake.velocities[0].down, 0.0F);
 }
 
-TEST_F(NodeTest, HeadingTurnsTheTargetInTheImage) {
+TEST_F(NodeTest, HeadingTurnsTheTargetInPlace) {
     node->onCameraInfo(cameraInfo());
     // Person 7 m due north. Facing north it is centred; facing 30 deg to the right of north it is
-    // 30 deg to the left of the nose, so the drone must yaw and strafe left.
+    // 30 deg to the left of the nose, so the drone must yaw left without translating.
     node->onTracking(trackingMsg(7.0, 0.0), t(1.0));
     node->onGeolocation(droneMsg(), t(1.0));
     fake.heading_deg = 0.0;
@@ -544,22 +539,24 @@ TEST_F(NodeTest, HeadingTurnsTheTargetInTheImage) {
     ASSERT_EQ(fake.velocities.size(), 3U);
     EXPECT_NEAR(fake.velocities[0].yaw, 0.0F, 1e-3);
     EXPECT_LT(fake.velocities[1].yaw, -1.0F);
-    EXPECT_LT(fake.velocities[1].right, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[1].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[1].right, 0.0F);
     EXPECT_GT(fake.velocities[2].yaw, 1.0F);
-    EXPECT_GT(fake.velocities[2].right, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[2].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[2].right, 0.0F);
     // x = 960 + 1000 * tan(-30 deg) = 383 px: normalised -0.6 of the half width -> yaw -0.60 * 45.
     EXPECT_NEAR(fake.velocities[1].yaw, -std::abs(std::tan(30.0 / kDegPerRad)) * 1000.0 / 960.0 * 45.0,
                 1e-2);
 }
 
-TEST_F(NodeTest, NoTrackingMeansTheScanNotAFollowCommand) {
+TEST_F(NodeTest, NoTrackingMeansAnInPlaceScanNotAFollowCommand) {
     node->onCameraInfo(cameraInfo());
     node->onGeolocation(droneMsg(), t(1.0));  // the drone is known, the person never was
     node->tick(t(1.1));
     ASSERT_EQ(fake.velocities.size(), 1U);  // the scan does send commands
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities[0].forward, 0.28F, 1e-6);
-    EXPECT_NEAR(fake.velocities[0].right, 0.0F, 1e-6);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
     EXPECT_NEAR(fake.velocities[0].yaw, 25.0F, 1e-6);
 }
 
@@ -569,7 +566,8 @@ TEST_F(NodeTest, TrackingWithoutGeolocationMeansSearch) {
     node->tick(t(1.1));
     ASSERT_EQ(fake.velocities.size(), 1U);
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities[0].forward, 0.28F, 1e-6);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
     EXPECT_NEAR(fake.velocities[0].yaw, 25.0F, 1e-6);
 }
 
@@ -580,7 +578,8 @@ TEST_F(NodeTest, MissingHeadingMeansSearch) {
     node->tick(t(1.1));
     ASSERT_EQ(fake.velocities.size(), 1U);
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities[0].forward, 0.28F, 1e-6);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
     EXPECT_NEAR(fake.velocities[0].yaw, 25.0F, 1e-6);
     fake.heading_deg = std::nan("");  // a non-finite heading is as good as none
     personAtPixel(*node, 1440.0, 7.0, t(1.2));
@@ -590,7 +589,7 @@ TEST_F(NodeTest, MissingHeadingMeansSearch) {
     personAtPixel(*node, 1440.0, 7.0, t(1.4));
     node->tick(t(1.5));
     EXPECT_FALSE(node->searching());
-    EXPECT_NEAR(fake.velocities.back().forward, 0.35F, 1e-4);
+    EXPECT_FLOAT_EQ(fake.velocities.back().forward, 0.0F);
 }
 
 TEST_F(NodeTest, StaleTrackingStartsTheSearch) {
@@ -658,7 +657,7 @@ TEST_F(NodeTest, TargetOutsideTheCameraViewGivesNoForwardMotion) {
     EXPECT_GT(fake.velocities[0].yaw, 0.0F);  // still turns toward it
     personAt(*node, 40.0, 12.0, t(1.2));  // 1799 px: in view, so the range counts
     node->tick(t(1.3));
-    EXPECT_GT(fake.velocities.back().forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities.back().forward, 0.0F);
 }
 
 TEST_F(NodeTest, FollowModeNeverStrafesWhenTheTargetHasNoRange) {
@@ -683,13 +682,14 @@ TEST_F(NodeTest, FollowModeNeverStrafesWhenTheTargetHasNoRange) {
     }
 }
 
-TEST_F(NodeTest, InViewTargetStillStrafesInFollowMode) {
-    // The out-of-view rule must not touch targets that have a range.
+TEST_F(NodeTest, OffCentreTargetTurnsInPlaceEvenWhenItHasRange) {
     node->onCameraInfo(cameraInfo());
     personAtPixel(*node, 1440.0, 7.0, t(1.0));
     node->tick(t(1.1));
     ASSERT_EQ(fake.velocities.size(), 1U);
-    EXPECT_NEAR(fake.velocities[0].right, 0.1575F, 1e-5);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
+    EXPECT_GT(fake.velocities[0].yaw, 0.0F);
 }
 
 TEST_F(NodeTest, OrbitModeIsUnchangedForTargetsWithoutRange) {
@@ -749,7 +749,7 @@ TEST_F(NodeTest, LostLinkWhileFollowingSendsNothingAndRestartsOffboard) {
     node->tick(t(2.1));
     EXPECT_EQ(fake.offboard_starts, 2);
     ASSERT_EQ(fake.velocities.size(), 2U);
-    EXPECT_NEAR(fake.velocities[1].forward, 0.35F, 1e-4);
+    EXPECT_FLOAT_EQ(fake.velocities[1].forward, 0.0F);
 }
 
 // One limit per output, for targets all around the drone at every range, follow and orbit, default
@@ -760,10 +760,10 @@ TEST_F(NodeTest, LimitsHoldForTrackedTargetsAllAroundTheDrone) {
         double forward, strafe, yaw;
     };
     const std::vector<Config> configs = {
-        {{}, 0.7, 0.45, 45.0},
+        {{}, 0.7, 0.0, 45.0},
         {{{"orbit_enabled", true}}, 0.7, kOrbitSpeedCeilingMps, 45.0},
-        {{{"max_forward_m_s", 99.0}, {"max_strafe_m_s", 99.0}, {"max_yaw_rate_deg_s", 9999.0}},
-         kForwardSpeedCeilingMps, kStrafeSpeedCeilingMps, kYawRateCeilingDegS},
+        {{{"max_forward_m_s", 99.0}, {"max_yaw_rate_deg_s", 9999.0}},
+         kForwardSpeedCeilingMps, 0.0, kYawRateCeilingDegS},
         {{{"orbit_enabled", true}, {"orbit_period_s", 5.0}, {"max_orbit_speed_m_s", 99.0},
           {"max_forward_m_s", 99.0}, {"max_yaw_rate_deg_s", 9999.0}},
          kForwardSpeedCeilingMps, kOrbitSpeedCeilingMps, kYawRateCeilingDegS},
@@ -806,25 +806,35 @@ TEST_F(NodeTest, AccelerationLimitsSmoothTheCommandsAndRestartFromRest) {
     auto n = make({{"max_forward_accel_m_s2", 1.0}, {"max_yaw_accel_deg_s2", 100.0}}, &f);
     n->onCameraInfo(cameraInfo());
     for (int i = 0; i < 3; ++i) {
-        personAtPixel(*n, 1920.0, 9.0, t(1.0 + i * 0.1));  // far, at the right edge
+        personAtPixel(*n, 960.0, 9.0, t(1.0 + i * 0.1));  // far and centred
         n->tick(t(1.05 + i * 0.1));
     }
     ASSERT_EQ(f.velocities.size(), 3U);
     EXPECT_NEAR(f.velocities[0].forward, 0.1F, 1e-5);  // 1 m/s^2 * 0.1 s, not the full 0.7
     EXPECT_NEAR(f.velocities[1].forward, 0.2F, 1e-5);
     EXPECT_NEAR(f.velocities[2].forward, 0.3F, 1e-5);
-    EXPECT_NEAR(f.velocities[0].yaw, 10.0F, 1e-4);
+    personAtPixel(*n, 1920.0, 9.0, t(1.4));  // turn toward the right edge and brake forward
+    n->tick(t(1.45));
+    ASSERT_EQ(f.velocities.size(), 4U);
+    EXPECT_NEAR(f.velocities[3].forward, 0.2F, 1e-5);
+    EXPECT_NEAR(f.velocities[3].right, 0.0F, 1e-6);
+    EXPECT_NEAR(f.velocities[3].yaw, 10.0F, 1e-4);
 }
 
 TEST_F(NodeTest, TunedGainsAreUsed) {
     FakeState f;
     auto n = make({{"forward_gain", 0.7}, {"yaw_gain", 0.5}}, &f);
     n->onCameraInfo(cameraInfo());
-    personAtPixel(*n, 1440.0, 7.0, t(1.0));  // half right, 1 m too far
+    personAtPixel(*n, 960.0, 7.0, t(1.0));  // centred, 1 m too far
     n->tick(t(1.1));
     ASSERT_EQ(f.velocities.size(), 1U);
     EXPECT_NEAR(f.velocities[0].forward, 0.7F, 1e-4);
-    EXPECT_NEAR(f.velocities[0].yaw, 11.25F, 1e-4);
+    EXPECT_FLOAT_EQ(f.velocities[0].yaw, 0.0F);
+    personAtPixel(*n, 1440.0, 7.0, t(1.2));  // half right: turn, not translate
+    n->tick(t(1.3));
+    ASSERT_EQ(f.velocities.size(), 2U);
+    EXPECT_FLOAT_EQ(f.velocities[1].forward, 0.0F);
+    EXPECT_NEAR(f.velocities[1].yaw, 11.25F, 1e-4);
 }
 
 // ---------- orbit ----------
@@ -937,30 +947,32 @@ TEST_F(NodeTest, LostTargetOnTheLeftSweepsLeftFirst) {
     EXPECT_LT(f.velocities[0].yaw, 0.0F);
 }
 
-TEST_F(NodeTest, AfterTheLastKnownWindowTheSpiralScanTakesOver) {
+TEST_F(NodeTest, AfterTheLastKnownWindowTheInPlaceScanTakesOver) {
     FakeState f;
     auto n = make({{"last_known_search_s", 2.0}}, &f);
     n->onCameraInfo(cameraInfo());
     personAtPixel(*n, 960.0, 6.0, t(1.0));
     n->tick(t(1.05));
     f.velocities.clear();
-    n->tick(t(2.5));   // search starts: inside the 2 s window
-    n->tick(t(5.0));   // 2.5 s after the start: past the window
+    n->tick(t(2.5));  // search starts: inside the 2 s window
+    n->tick(t(5.0));  // 2.5 s after the start: past the window
     ASSERT_EQ(f.velocities.size(), 2U);
     EXPECT_FLOAT_EQ(f.velocities[0].forward, 0.0F);   // sweep: no translation
-    EXPECT_NEAR(f.velocities[1].forward, 0.28F, 1e-4);  // original spiral: creeps forward
+    EXPECT_FLOAT_EQ(f.velocities[1].forward, 0.0F);    // scan remains in place
+    EXPECT_FLOAT_EQ(f.velocities[1].right, 0.0F);
     EXPECT_NEAR(f.velocities[1].yaw, 25.0F, 1e-4);
     EXPECT_TRUE(n->searching());
 }
 
-TEST_F(NodeTest, WithoutTheOptionTheOriginalSpiralRunsFromTheStart) {
+TEST_F(NodeTest, WithoutTheOptionSearchTurnsInPlaceFromTheStart) {
     node->onCameraInfo(cameraInfo());
     personAtPixel(*node, 1500.0, 6.0, t(1.0));
     node->tick(t(1.05));
     fake.velocities.clear();
     node->tick(t(2.5));
     ASSERT_EQ(fake.velocities.size(), 1U);
-    EXPECT_NEAR(fake.velocities[0].forward, 0.28F, 1e-4);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities[0].right, 0.0F);
     EXPECT_NEAR(fake.velocities[0].yaw, 25.0F, 1e-4);
 }
 
@@ -980,24 +992,27 @@ TEST_F(NodeTest, ReacquiringTheTargetEndsTheSweepAndFollowsAgain) {
 
 // ---------- target lost: search ----------
 
-TEST_F(NodeTest, NoTargetEverMeansTheSpiralScan) {
+TEST_F(NodeTest, NoTargetEverMeansAnInPlaceScan) {
     node->tick(t(1.0));
     ASSERT_EQ(fake.velocities.size(), 1U);
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities[0].forward, 0.28F, 1e-6);
+    EXPECT_FLOAT_EQ(fake.velocities[0].forward, 0.0F);
     EXPECT_NEAR(fake.velocities[0].right, 0.0F, 1e-6);
     EXPECT_NEAR(fake.velocities[0].yaw, 25.0F, 1e-6);
 }
 
-TEST_F(NodeTest, StaleTargetStartsTheScanAndItsSineRunsFromThatMoment) {
+TEST_F(NodeTest, StaleTargetStartsAnInPlaceScan) {
     node->onCameraInfo(cameraInfo());
     personAtPixel(*node, 960.0, 6.0, t(1.0));
     node->tick(t(1.1));
     node->tick(t(2.0));          // 1.0 s old: stale, scan begins here
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities.back().right, 0.0F, 1e-6);
-    node->tick(t(3.0));          // 1 s into the scan = quarter period at 0.25 Hz
-    EXPECT_NEAR(fake.velocities.back().right, 0.45F, 1e-5);
+    EXPECT_FLOAT_EQ(fake.velocities.back().forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities.back().right, 0.0F);
+    node->tick(t(3.0));
+    EXPECT_FLOAT_EQ(fake.velocities.back().forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities.back().right, 0.0F);
+    EXPECT_NEAR(fake.velocities.back().yaw, 25.0F, 1e-5);
 }
 
 TEST_F(NodeTest, TargetReturningStopsTheScanAndRestartsItFromZeroNextTime) {
@@ -1010,7 +1025,8 @@ TEST_F(NodeTest, TargetReturningStopsTheScanAndRestartsItFromZeroNextTime) {
     EXPECT_FALSE(node->searching());
     node->tick(t(10.0));  // lost again: new scan starts at phase 0
     EXPECT_TRUE(node->searching());
-    EXPECT_NEAR(fake.velocities.back().right, 0.0F, 1e-6);
+    EXPECT_FLOAT_EQ(fake.velocities.back().forward, 0.0F);
+    EXPECT_FLOAT_EQ(fake.velocities.back().right, 0.0F);
 }
 
 TEST_F(NodeTest, ByDefaultTheScanNeverGivesUp) {

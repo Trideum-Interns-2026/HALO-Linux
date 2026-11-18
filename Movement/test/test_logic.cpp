@@ -21,7 +21,7 @@ const FollowParams kP = sanitize(FollowParams{});
 
 }  // namespace
 
-// ---------- defaults are the original controller's numbers ----------
+// ---------- defaults ----------
 
 TEST(Defaults, MatchTheOriginalController) {
     const FollowParams p;
@@ -29,12 +29,8 @@ TEST(Defaults, MatchTheOriginalController) {
     EXPECT_DOUBLE_EQ(p.min_distance_m, 4.0);
     EXPECT_DOUBLE_EQ(p.max_distance_m, 9.0);
     EXPECT_DOUBLE_EQ(p.max_forward_m_s, 0.7);
-    EXPECT_DOUBLE_EQ(p.max_strafe_m_s, 0.45);
     EXPECT_DOUBLE_EQ(p.max_yaw_rate_deg_s, 45.0);
     EXPECT_DOUBLE_EQ(p.search_yaw_rate_deg_s, 25.0);
-    EXPECT_DOUBLE_EQ(p.search_forward_m_s, 0.35);
-    EXPECT_DOUBLE_EQ(p.search_strafe_m_s, 0.45);
-    EXPECT_DOUBLE_EQ(p.search_orbit_hz, 0.25);
 }
 
 TEST(Defaults, SanitizeLeavesTheDefaultsUntouched) {
@@ -42,46 +38,42 @@ TEST(Defaults, SanitizeLeavesTheDefaultsUntouched) {
     const FollowParams p;
     EXPECT_DOUBLE_EQ(s.safe_distance_m, p.safe_distance_m);
     EXPECT_DOUBLE_EQ(s.max_forward_m_s, p.max_forward_m_s);
-    EXPECT_DOUBLE_EQ(s.max_strafe_m_s, p.max_strafe_m_s);
     EXPECT_DOUBLE_EQ(s.max_yaw_rate_deg_s, p.max_yaw_rate_deg_s);
-    EXPECT_DOUBLE_EQ(s.search_forward_m_s, p.search_forward_m_s);
-    EXPECT_DOUBLE_EQ(s.search_strafe_m_s, p.search_strafe_m_s);
     EXPECT_DOUBLE_EQ(s.search_yaw_rate_deg_s, p.search_yaw_rate_deg_s);
-    EXPECT_DOUBLE_EQ(s.search_orbit_hz, p.search_orbit_hz);
 }
 
-// ---------- follow: centring (yaw and strafe) ----------
+// ---------- follow: turn in place to centre ----------
 
 struct OffsetCase {
     double x_px;
     double yaw_deg_s;
-    double right_m_s;
 };
 
 class Offset : public ::testing::TestWithParam<OffsetCase> {};
 
-TEST_P(Offset, YawAndStrafeFollowTheOriginalFormula) {
+TEST_P(Offset, TurnsTowardTargetWithoutStrafing) {
     const OffsetCase c = GetParam();
     const VelocityCommand v = computeFollowCommand(c.x_px, 6.0, camera(), kP);
     EXPECT_NEAR(v.yawspeed_deg_s, c.yaw_deg_s, 1e-9);
-    EXPECT_NEAR(v.right_m_s, c.right_m_s, 1e-9);
+    EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Frame, Offset,
     ::testing::Values(
-        OffsetCase{960.0, 0.0, 0.0},                 // centred
-        OffsetCase{1440.0, 22.5, 0.7 * 0.5 * 0.45},  // half way to the right edge
-        OffsetCase{480.0, -22.5, -0.7 * 0.5 * 0.45},
-        OffsetCase{1920.0, 45.0, 0.7 * 0.45},        // right edge: full yaw, 0.7 of max strafe
-        OffsetCase{0.0, -45.0, -0.7 * 0.45},
-        OffsetCase{5000.0, 45.0, 0.7 * 0.45},        // beyond the frame clamps
-        OffsetCase{-5000.0, -45.0, -0.7 * 0.45}));
+        OffsetCase{960.0, 0.0},      // centred
+        OffsetCase{1440.0, 22.5},   // half way to the right edge
+        OffsetCase{480.0, -22.5},
+        OffsetCase{1920.0, 45.0},   // right edge: full yaw
+        OffsetCase{0.0, -45.0},
+        OffsetCase{5000.0, 45.0},   // beyond the frame clamps
+        OffsetCase{-5000.0, -45.0}));
 
-TEST(Follow, TargetRightOfCentreYawsClockwiseAndStrafesRight) {
+TEST(Follow, TargetRightOfCentreYawsClockwiseWithoutStrafing) {
     const VelocityCommand v = computeFollowCommand(1200.0, 6.0, camera(), kP);
     EXPECT_GT(v.yawspeed_deg_s, 0.0);
-    EXPECT_GT(v.right_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(v.forward_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
 }
 
 // ---------- follow: distance ----------
@@ -121,7 +113,7 @@ TEST(Follow, EveryOutputStaysWithinTheConfiguredLimits) {
         for (double d = 0.1; d <= 60.0; d += 1.3) {
             const VelocityCommand v = computeFollowCommand(x, d, camera(), kP);
             EXPECT_LE(std::abs(v.forward_m_s), kP.max_forward_m_s + 1e-12);
-            EXPECT_LE(std::abs(v.right_m_s), kP.max_strafe_m_s + 1e-12);
+            EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
             EXPECT_LE(std::abs(v.yawspeed_deg_s), kP.max_yaw_rate_deg_s + 1e-12);
         }
     }
@@ -130,61 +122,54 @@ TEST(Follow, EveryOutputStaysWithinTheConfiguredLimits) {
 TEST(Follow, TighterLimitsAreHonoured) {
     FollowParams p;
     p.max_forward_m_s = 0.2;
-    p.max_strafe_m_s = 0.1;
     p.max_yaw_rate_deg_s = 10.0;
     p = sanitize(p);
     const VelocityCommand v = computeFollowCommand(1920.0, 9.0, camera(), p);
-    EXPECT_DOUBLE_EQ(v.forward_m_s, 0.2);
-    EXPECT_NEAR(v.right_m_s, 0.07, 1e-12);
+    EXPECT_DOUBLE_EQ(v.forward_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
     EXPECT_DOUBLE_EQ(v.yawspeed_deg_s, 10.0);
 }
 
-// ---------- search spiral ----------
+TEST(Follow, HoldsDistanceWithinTheDeadband) {
+    EXPECT_DOUBLE_EQ(computeFollowCommand(960.0, 6.29, camera(), kP).forward_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(computeFollowCommand(960.0, 5.71, camera(), kP).forward_m_s, 0.0);
+    EXPECT_GT(computeFollowCommand(960.0, 6.31, camera(), kP).forward_m_s, 0.0);
+    EXPECT_LT(computeFollowCommand(960.0, 5.69, camera(), kP).forward_m_s, 0.0);
+}
 
-TEST(Search, StartsCreepingForwardWithTheOriginalNumbers) {
-    const VelocityCommand v = computeSearchCommand(0.0, kP);
-    EXPECT_NEAR(v.forward_m_s, 0.35 * 0.8, 1e-12);
-    EXPECT_NEAR(v.right_m_s, 0.0, 1e-12);
+TEST(Follow, PixelNoiseInsideTheCenterDeadbandDoesNotCauseYaw) {
+    const double inside = 960.0 + kTargetCenterDeadband * 960.0 * 0.9;
+    const double outside = 960.0 + kTargetCenterDeadband * 960.0 * 1.1;
+    EXPECT_DOUBLE_EQ(computeFollowCommand(inside, 7.0, camera(), kP).yawspeed_deg_s, 0.0);
+    EXPECT_GT(computeFollowCommand(outside, 7.0, camera(), kP).yawspeed_deg_s, 0.0);
+}
+
+// ---------- search: yaw in place ----------
+
+TEST(Search, TurnsWithoutTranslating) {
+    const VelocityCommand v = computeSearchCommand(kP);
+    EXPECT_DOUBLE_EQ(v.forward_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
     EXPECT_DOUBLE_EQ(v.yawspeed_deg_s, 25.0);
 }
 
-TEST(Search, StrafeIsASineAtTheOrbitFrequency) {
-    // 0.25 Hz: period 4 s.
-    EXPECT_NEAR(computeSearchCommand(1.0, kP).right_m_s, 0.45, 1e-9);    // peak
-    EXPECT_NEAR(computeSearchCommand(2.0, kP).right_m_s, 0.0, 1e-9);
-    EXPECT_NEAR(computeSearchCommand(3.0, kP).right_m_s, -0.45, 1e-9);   // trough
-    EXPECT_NEAR(computeSearchCommand(4.0, kP).right_m_s, 0.0, 1e-9);
-}
-
-TEST(Search, YawRateAndForwardSpeedStayConstant) {
-    for (double t : {0.0, 0.7, 5.0, 123.4}) {
-        const VelocityCommand v = computeSearchCommand(t, kP);
-        EXPECT_DOUBLE_EQ(v.forward_m_s, 0.35 * 0.8);
+TEST(Search, ScanOnlyCommandsYaw) {
+    for (int step = 0; step < 20; ++step) {
+        const VelocityCommand v = computeSearchCommand(kP);
+        EXPECT_DOUBLE_EQ(v.forward_m_s, 0.0);
+        EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
         EXPECT_DOUBLE_EQ(v.yawspeed_deg_s, 25.0);
     }
 }
 
-TEST(Search, ZeroOrbitFrequencyMeansNoSidewaysMotion) {
+TEST(Search, RateCannotExceedTheYawLimit) {
     FollowParams p;
-    p.search_orbit_hz = 0.0;
-    p = sanitize(p);
-    for (double t : {0.0, 1.0, 9.0}) {
-        EXPECT_NEAR(computeSearchCommand(t, p).right_m_s, 0.0, 1e-12);
-    }
-}
-
-TEST(Search, ParametersCannotMakeTheScanFasterThanTheFollowLimits) {
-    FollowParams p;
-    p.search_forward_m_s = 50.0;
-    p.search_strafe_m_s = 50.0;
     p.search_yaw_rate_deg_s = 500.0;
     p = sanitize(p);
-    for (double t = 0.0; t < 8.0; t += 0.25) {
-        const VelocityCommand v = computeSearchCommand(t, p);
-        EXPECT_LE(std::abs(v.forward_m_s), p.max_forward_m_s + 1e-12);
-        EXPECT_LE(std::abs(v.right_m_s), p.max_strafe_m_s + 1e-12);
-        EXPECT_LE(std::abs(v.yawspeed_deg_s), p.max_yaw_rate_deg_s + 1e-12);
-    }
+    const VelocityCommand v = computeSearchCommand(p);
+    EXPECT_DOUBLE_EQ(v.forward_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(v.right_m_s, 0.0);
+    EXPECT_LE(std::abs(v.yawspeed_deg_s), p.max_yaw_rate_deg_s);
 }
 
 // ---------- hard caps ----------
@@ -195,27 +180,21 @@ TEST(Sanitize, EveryLimitIsEnforced) {
     wild.max_distance_m = 500.0;
     wild.safe_distance_m = 1000.0;
     wild.max_forward_m_s = 50.0;
-    wild.max_strafe_m_s = 50.0;
     wild.max_yaw_rate_deg_s = 5000.0;
-    wild.search_orbit_hz = 40.0;
     const FollowParams s = sanitize(wild);
     EXPECT_DOUBLE_EQ(s.min_distance_m, kMinDistanceFloorM);
     EXPECT_DOUBLE_EQ(s.max_distance_m, kMaxDistanceCeilingM);
     EXPECT_DOUBLE_EQ(s.safe_distance_m, kMaxDistanceCeilingM);
     EXPECT_DOUBLE_EQ(s.max_forward_m_s, kForwardSpeedCeilingMps);
-    EXPECT_DOUBLE_EQ(s.max_strafe_m_s, kStrafeSpeedCeilingMps);
     EXPECT_DOUBLE_EQ(s.max_yaw_rate_deg_s, kYawRateCeilingDegS);
-    EXPECT_DOUBLE_EQ(s.search_orbit_hz, kSearchOrbitCeilingHz);
 }
 
 TEST(Sanitize, NegativeLimitsBecomeZeroNotReversed) {
     FollowParams p;
     p.max_forward_m_s = -1.0;
-    p.max_strafe_m_s = -1.0;
     p.max_yaw_rate_deg_s = -1.0;
     const FollowParams s = sanitize(p);
     EXPECT_DOUBLE_EQ(s.max_forward_m_s, 0.0);
-    EXPECT_DOUBLE_EQ(s.max_strafe_m_s, 0.0);
     EXPECT_DOUBLE_EQ(s.max_yaw_rate_deg_s, 0.0);
 }
 
@@ -455,7 +434,6 @@ TEST(OrbitLoop, PersonThatMovesStaysCentred) {
 TEST(Gains, DefaultsAreTheOriginalControllersNumbers) {
     const FollowParams p;
     EXPECT_DOUBLE_EQ(p.forward_gain, 0.35);
-    EXPECT_DOUBLE_EQ(p.lateral_gain, 0.7);
     EXPECT_DOUBLE_EQ(p.yaw_gain, 1.0);
     EXPECT_DOUBLE_EQ(p.orbit_yaw_ki, 30.0);
     EXPECT_DOUBLE_EQ(p.max_forward_accel_m_s2, 0.0);  // smoothing is off unless asked for
@@ -466,19 +444,20 @@ TEST(Gains, DefaultsAreTheOriginalControllersNumbers) {
 TEST(Gains, FollowUsesTheParameterisedGains) {
     FollowParams p;
     p.forward_gain = 0.5;
-    p.lateral_gain = 0.5;
     p.yaw_gain = 0.5;
     p = sanitize(p);
-    const VelocityCommand c = computeFollowCommand(1440.0, 7.0, camera(), p);  // half right, 1 m far
-    EXPECT_NEAR(c.forward_m_s, 0.5, 1e-9);
-    EXPECT_NEAR(c.right_m_s, 0.5 * 0.5 * 0.45, 1e-9);
-    EXPECT_NEAR(c.yawspeed_deg_s, 0.5 * 0.5 * 45.0, 1e-9);
+    const VelocityCommand turn = computeFollowCommand(1440.0, 7.0, camera(), p);
+    EXPECT_DOUBLE_EQ(turn.forward_m_s, 0.0);
+    EXPECT_DOUBLE_EQ(turn.right_m_s, 0.0);
+    EXPECT_NEAR(turn.yawspeed_deg_s, 0.5 * 0.5 * 45.0, 1e-9);
+    const VelocityCommand approach = computeFollowCommand(960.0, 7.0, camera(), p);
+    EXPECT_NEAR(approach.forward_m_s, 0.5, 1e-9);
+    EXPECT_DOUBLE_EQ(approach.yawspeed_deg_s, 0.0);
 }
 
 TEST(Gains, SanitizeEnforcesCeilingsAndFloors) {
     FollowParams p;
     p.forward_gain = 99.0;
-    p.lateral_gain = 99.0;
     p.yaw_gain = 99.0;
     p.orbit_yaw_ki = 1e9;
     p.max_forward_accel_m_s2 = 99.0;
@@ -486,7 +465,6 @@ TEST(Gains, SanitizeEnforcesCeilingsAndFloors) {
     p.max_yaw_accel_deg_s2 = 1e9;
     const FollowParams hi = sanitize(p);
     EXPECT_DOUBLE_EQ(hi.forward_gain, kForwardGainCeiling);
-    EXPECT_DOUBLE_EQ(hi.lateral_gain, kLateralGainCeiling);
     EXPECT_DOUBLE_EQ(hi.yaw_gain, kYawGainCeiling);
     EXPECT_DOUBLE_EQ(hi.orbit_yaw_ki, kOrbitYawIntegralGainCeiling);
     EXPECT_DOUBLE_EQ(hi.max_forward_accel_m_s2, kForwardAccelCeilingMps2);

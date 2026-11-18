@@ -73,7 +73,9 @@ echo "alias sitl_vehicle='/workspace/scripts/sitl_vehicle'" >> /etc/bash.bashrc
 sed -i '/^alias gps=/d' /etc/bash.bashrc
 sed -i '/^alias tracking=/d' /etc/bash.bashrc
 sed -i '/^alias geolocation=/d' /etc/bash.bashrc
-echo "alias tracking='ros2 launch tracking tracking.launch.py'" >> /etc/bash.bashrc
+# Gazebo sensor stamps use sim time; without this Tracking rejects them as stale and
+# Movement falls back to its search rotation.
+echo "alias tracking='ros2 launch tracking tracking.launch.py use_sim_time:=true'" >> /etc/bash.bashrc
 echo "alias geolocation='ros2 launch geolocation geolocation.launch.py'" >> /etc/bash.bashrc
 sed -i '/^alias ui=/d' /etc/bash.bashrc
 echo "alias ui='ros2 launch ui ui.launch.py'" >> /etc/bash.bashrc

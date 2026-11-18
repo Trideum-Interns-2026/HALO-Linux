@@ -57,8 +57,10 @@ source /opt/px4_ros2/install/setup.bash
 cd /opt/ros2_ws && colcon build \
   --packages-select perception_msgs geolocation_msgs tracking_msgs tracking --symlink-install
 source /opt/ros2_ws/install/setup.bash
-ros2 launch tracking tracking.launch.py
+ros2 launch tracking tracking.launch.py use_sim_time:=true
 ```
+
+For real hardware, omit `use_sim_time:=true`.
 
 The PX4 ROS 2 bridge must publish `/fmu/out/vehicle_attitude`; no MAVLink connection is opened
 by Tracking.

@@ -149,8 +149,11 @@ stops with *"HALO_DEV is not set"*, see section 4.
 - **Gazebo / the desktop**: VS Code's *Ports* tab shows **Selkies desktop**
   (8080) — click the globe. Log in with user = your `HALO_DEV`, password =
   `SELKIES_BASIC_AUTH_PASSWORD` from your `.env` (auto-generated on first
-  open). Page and video both ride that one forwarded port (Selkies 2.x
-  streams over a WebSocket). The groundstation dashboard is on **8000**
+  open). The desktop stream uses the fixed 1920x1080 Xvfb display; client
+  resizing is disabled because Xvfb cannot add larger display modes, and
+  scaling is fixed at 96 DPI so high-DPI browser settings do not enlarge and
+  clip Gazebo's controls. Page and video both ride that one forwarded port
+  (Selkies 2.x streams over a WebSocket). The groundstation dashboard is on **8000**
   (`http://127.0.0.1:8000`, forwarded the same way); 8080 and 8000 are the
   only web ports to forward.
 - **QGroundControl runs on your laptop**, with your own gamepad — over a

@@ -20,16 +20,10 @@ MovementNode::MovementNode(std::unique_ptr<VehicleInterface> vehicle,
     requested.min_distance_m = declare_parameter("min_distance_m", kMinDistanceM);
     requested.max_distance_m = declare_parameter("max_distance_m", kMaxDistanceM);
     requested.max_forward_m_s = declare_parameter("max_forward_m_s", kMaxForwardSpeedMps);
-    requested.max_strafe_m_s = declare_parameter("max_strafe_m_s", kMaxStrafeSpeedMps);
     requested.max_yaw_rate_deg_s = declare_parameter("max_yaw_rate_deg_s", kMaxYawRateDegS);
     requested.search_yaw_rate_deg_s =
         declare_parameter("search_yaw_rate_deg_s", kDefaultSearchYawRateDegS);
-    requested.search_forward_m_s =
-        declare_parameter("search_forward_m_s", kDefaultSearchForwardMps);
-    requested.search_strafe_m_s = declare_parameter("search_strafe_m_s", kDefaultSearchStrafeMps);
-    requested.search_orbit_hz = declare_parameter("search_orbit_hz", kDefaultSearchOrbitHz);
     requested.forward_gain = declare_parameter("forward_gain", kForwardGain);
-    requested.lateral_gain = declare_parameter("lateral_gain", kLateralGain);
     requested.yaw_gain = declare_parameter("yaw_gain", kYawGain);
     requested.orbit_yaw_ki = declare_parameter("orbit_yaw_ki", kOrbitYawIntegralGain);
     requested.last_known_search_s =
@@ -78,14 +72,13 @@ MovementNode::MovementNode(std::unique_ptr<VehicleInterface> vehicle,
     control_timer_ = create_wall_timer(kLoopPeriod, [this]() { tick(now()); });
 
     RCLCPP_INFO(get_logger(),
-                "movement: follow %.1f m (%.1f-%.1f), max fwd %.2f / strafe %.2f m/s, yaw %.0f "
-                "deg/s, search %.2f m/s %.0f deg/s %.2f Hz (timeout %.0f s), target timeout "
+                "movement: hold %.1f m (%.1f-%.1f), max fwd %.2f m/s, yaw %.0f "
+                "deg/s, search yaw %.0f deg/s (timeout %.0f s), target timeout "
                 "%d ms, auto_arm_takeoff=%s, mavsdk=%s, heading timeout %.1f s, tracking=%s, geolocation=%s, max target error %.1f m (0 = off), "
                 "orbit=%s (%s, %.0f s/lap, max %.2f m/s)",
                 params_.safe_distance_m, params_.min_distance_m, params_.max_distance_m,
-                params_.max_forward_m_s, params_.max_strafe_m_s, params_.max_yaw_rate_deg_s,
-                params_.search_forward_m_s, params_.search_yaw_rate_deg_s,
-                params_.search_orbit_hz, search_timeout_s_, target_timeout_ms_,
+                params_.max_forward_m_s, params_.max_yaw_rate_deg_s,
+                params_.search_yaw_rate_deg_s, search_timeout_s_, target_timeout_ms_,
                 auto_arm_takeoff_ ? "true" : "false",
                 mavsdk_url.empty() ? "(not given)" : mavsdk_url.c_str(), heading_timeout_s,
                 tracking_topic.c_str(),
@@ -237,11 +230,6 @@ void MovementNode::tick(const rclcpp::Time& now) {
                                         orbit_state_,
                                         std::chrono::duration<double>(kLoopPeriod).count())
                   : computeFollowCommand(target_x_px, distance, camera, params_);
-        if (!orbit_.enabled && !distance) {
-            // Person beside or behind the drone: their range is unknown, so min_distance_m cannot
-            // be enforced. Only yaw toward them; never strafe toward a target at unknown range.
-            cmd.right_m_s = 0.0;
-        }
         last_offset_ = normalizedOffset(target_x_px, camera);
         if (std::abs(cmd.yawspeed_deg_s) > 1e-6) {
             last_turn_sign_ = cmd.yawspeed_deg_s > 0.0 ? 1.0 : -1.0;
@@ -277,13 +265,11 @@ void MovementNode::tick(const rclcpp::Time& now) {
                                  "forward=%.2f m/s, strafe=%.2f m/s, yaw=%.1f deg/s",
                                  cmd.forward_m_s, cmd.right_m_s, cmd.yawspeed_deg_s);
         } else {
-            // Out of the last-known window: the original spiral, timed from its own start.
-            const double spiral_s = std::max(0.0, elapsed_s - params_.last_known_search_s);
-            cmd = computeSearchCommand(spiral_s, params_);
+            // After the last-known window, continue scanning in place.
+            cmd = computeSearchCommand(params_);
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                                 "Target lost; searching with spiral scan: forward=%.2f m/s, "
-                                 "strafe=%.2f m/s, yaw=%.1f deg/s",
-                                 cmd.forward_m_s, cmd.right_m_s, cmd.yawspeed_deg_s);
+                                 "Target lost; scanning in place: yaw=%.1f deg/s",
+                                 cmd.yawspeed_deg_s);
         }
     }
 

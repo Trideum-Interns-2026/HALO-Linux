@@ -10,34 +10,26 @@ namespace movement {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// Defaults, same values as the original controller.
+// Follow and search defaults.
 constexpr double kDefaultDistanceM = 6.0;
 constexpr double kMinDistanceM = 4.0;
 constexpr double kMaxDistanceM = 9.0;
 constexpr double kMaxForwardSpeedMps = 0.7;
-constexpr double kMaxStrafeSpeedMps = 0.45;
 constexpr double kMaxYawRateDegS = 45.0;
 constexpr double kDefaultSearchYawRateDegS = 25.0;
-constexpr double kDefaultSearchForwardMps = 0.35;
-constexpr double kDefaultSearchStrafeMps = 0.45;
-constexpr double kDefaultSearchOrbitHz = 0.25;
+constexpr double kTargetCenterDeadband = 0.03;
+constexpr double kDistanceHoldDeadbandM = 0.3;
 
-// Controller gains, from the original.
+// Controller gains.
 constexpr double kForwardGain = 0.35;        // m/s per metre of distance error
-constexpr double kLateralGain = 0.7;         // fraction of max strafe at the frame edge
-constexpr double kSearchForwardFactor = 0.8;
-
 // Hard caps. Parameters can tighten these but never loosen them.
 constexpr double kForwardSpeedCeilingMps = 2.0;
-constexpr double kStrafeSpeedCeilingMps = 1.5;
 constexpr double kYawRateCeilingDegS = 90.0;
 constexpr double kMinDistanceFloorM = 2.0;
 constexpr double kMaxDistanceCeilingM = 30.0;
-constexpr double kSearchOrbitCeilingHz = 1.0;
 
 // Orbit mode (off by default). One lap takes `period_s`, so the sideways speed is
-// 2 pi r / period_s: 1.26 m/s for 6 m in 30 s. That is above the follow strafe limit, so orbit has
-// its own speed cap and hard ceiling; follow and the scan keep the limits above.
+// 2 pi r / period_s: 1.26 m/s for 6 m in 30 s. Orbit has its own speed cap and hard ceiling.
 constexpr double kDefaultOrbitPeriodS = 30.0;
 constexpr double kOrbitPeriodFloorS = 5.0;
 constexpr double kOrbitPeriodCeilingS = 600.0;
@@ -47,9 +39,7 @@ constexpr double kOrbitSpeedCeilingMps = 2.0;
 // term that removes the steady offset a constant turn rate would otherwise leave.
 constexpr double kOrbitYawIntegralGain = 30.0;  // deg/s per (normalised offset * second)
 
-// Search around the last known direction (off by default: 0 s). On loss the vehicle holds its
-// position and sweeps its nose over +-sweep_deg around where the person was last seen, then falls
-// back to the original spiral scan.
+// Search around the last known direction (off by default: 0 s), then continue scanning in place.
 constexpr double kDefaultLastKnownSearchS = 0.0;
 constexpr double kDefaultLastKnownSweepDeg = 60.0;
 constexpr double kDefaultLastKnownRateDegS = 20.0;
@@ -59,7 +49,6 @@ constexpr double kLastKnownSweepCeilingDeg = 180.0;
 // Tunable gains (defaults are the values above) and their hard ceilings.
 constexpr double kYawGain = 1.0;                 // fraction of max yaw rate at the frame edge
 constexpr double kForwardGainCeiling = 2.0;
-constexpr double kLateralGainCeiling = 1.0;
 constexpr double kYawGainCeiling = 2.0;
 constexpr double kOrbitYawIntegralGainCeiling = 120.0;
 // Acceleration limits that smooth the commands. 0 = off (a command may jump), as originally.
@@ -77,18 +66,13 @@ struct FollowParams {
     double min_distance_m{kMinDistanceM};
     double max_distance_m{kMaxDistanceM};
     double max_forward_m_s{kMaxForwardSpeedMps};
-    double max_strafe_m_s{kMaxStrafeSpeedMps};
     double max_yaw_rate_deg_s{kMaxYawRateDegS};
     double search_yaw_rate_deg_s{kDefaultSearchYawRateDegS};
-    double search_forward_m_s{kDefaultSearchForwardMps};
-    double search_strafe_m_s{kDefaultSearchStrafeMps};
-    double search_orbit_hz{kDefaultSearchOrbitHz};
     // Controller gains.
     double forward_gain{kForwardGain};                       // m/s per metre of range error
-    double lateral_gain{kLateralGain};                       // fraction of max strafe at the edge
     double yaw_gain{kYawGain};                               // fraction of max yaw at the edge
     double orbit_yaw_ki{kOrbitYawIntegralGain};              // deg/s per normalised offset * s
-    // Last-known-direction search; last_known_search_s = 0 keeps the original spiral scan only.
+    // Last-known-direction search; last_known_search_s = 0 starts the yaw scan immediately.
     double last_known_search_s{kDefaultLastKnownSearchS};
     double last_known_sweep_deg{kDefaultLastKnownSweepDeg};
     double last_known_rate_deg_s{kDefaultLastKnownRateDegS};
@@ -149,20 +133,11 @@ struct CameraGeometry {
                               p.max_distance_m);
     p.max_forward_m_s = clamp(fin(p.max_forward_m_s, kMaxForwardSpeedMps), 0.0,
                               kForwardSpeedCeilingMps);
-    p.max_strafe_m_s = clamp(fin(p.max_strafe_m_s, kMaxStrafeSpeedMps), 0.0,
-                             kStrafeSpeedCeilingMps);
     p.max_yaw_rate_deg_s = clamp(fin(p.max_yaw_rate_deg_s, kMaxYawRateDegS), 0.0,
                                  kYawRateCeilingDegS);
     p.search_yaw_rate_deg_s = clamp(fin(p.search_yaw_rate_deg_s, kDefaultSearchYawRateDegS),
                                     -p.max_yaw_rate_deg_s, p.max_yaw_rate_deg_s);
-    p.search_forward_m_s = clamp(fin(p.search_forward_m_s, kDefaultSearchForwardMps),
-                                 -p.max_forward_m_s, p.max_forward_m_s);
-    p.search_strafe_m_s = clamp(fin(p.search_strafe_m_s, kDefaultSearchStrafeMps), 0.0,
-                                p.max_strafe_m_s);
-    p.search_orbit_hz = clamp(fin(p.search_orbit_hz, kDefaultSearchOrbitHz), 0.0,
-                              kSearchOrbitCeilingHz);
     p.forward_gain = clamp(fin(p.forward_gain, kForwardGain), 0.0, kForwardGainCeiling);
-    p.lateral_gain = clamp(fin(p.lateral_gain, kLateralGain), 0.0, kLateralGainCeiling);
     p.yaw_gain = clamp(fin(p.yaw_gain, kYawGain), 0.0, kYawGainCeiling);
     p.orbit_yaw_ki = clamp(fin(p.orbit_yaw_ki, kOrbitYawIntegralGain), 0.0,
                            kOrbitYawIntegralGainCeiling);
@@ -205,26 +180,26 @@ struct CameraGeometry {
     return clamp((target_x_px - c.center_x_px) / (c.width_px * 0.5), -1.0, 1.0);
 }
 
-// Target in view: close the distance to `safe_distance_m`, strafe toward the target's side of
-// the frame and yaw to keep it centred. `distance_m` is empty when no valid range exists, in
-// which case there is no forward motion. `p` must come from sanitize().
+// Target in view: turn in place until the target is centred, then approach or retreat to the
+// safe distance. A deadband avoids chasing pixel and range noise around the hold point.
 [[nodiscard]] inline VelocityCommand computeFollowCommand(
     double target_x_px, std::optional<double> distance_m, const CameraGeometry& camera,
     const FollowParams& p) {
     VelocityCommand cmd;
     const double normalized = normalizedOffset(target_x_px, camera);
-
+    if (std::abs(normalized) > kTargetCenterDeadband) {
+        cmd.yawspeed_deg_s = clamp(normalized * p.yaw_gain * p.max_yaw_rate_deg_s,
+                                   -p.max_yaw_rate_deg_s, p.max_yaw_rate_deg_s);
+        return cmd;
+    }
     if (distance_m) {
         const double d = clamp(*distance_m, p.min_distance_m, p.max_distance_m);
         const double distance_error = d - p.safe_distance_m;  // + = too far = move forward
-        cmd.forward_m_s = clamp(distance_error * p.forward_gain, -p.max_forward_m_s,
-                                p.max_forward_m_s);
+        if (std::abs(distance_error) > kDistanceHoldDeadbandM) {
+            cmd.forward_m_s = clamp(distance_error * p.forward_gain, -p.max_forward_m_s,
+                                    p.max_forward_m_s);
+        }
     }
-
-    const double lateral_error = clamp(normalized * p.lateral_gain, -1.0, 1.0);
-    cmd.right_m_s = clamp(lateral_error * p.max_strafe_m_s, -p.max_strafe_m_s, p.max_strafe_m_s);
-    cmd.yawspeed_deg_s = clamp(normalized * p.yaw_gain * p.max_yaw_rate_deg_s,
-                               -p.max_yaw_rate_deg_s, p.max_yaw_rate_deg_s);
     return cmd;
 }
 
@@ -290,14 +265,9 @@ struct CameraGeometry {
     return p.last_known_search_s > 0.0 && elapsed_s <= p.last_known_search_s;
 }
 
-// Target lost: spiral scan. Creep forward, sweep sideways on a sine and yaw at a constant rate.
-// `elapsed_s` is the time since the scan began. `p` must come from sanitize().
-[[nodiscard]] inline VelocityCommand computeSearchCommand(double elapsed_s,
-                                                          const FollowParams& p) {
+// Target lost: scan in place by yawing. `p` must come from sanitize().
+[[nodiscard]] inline VelocityCommand computeSearchCommand(const FollowParams& p) {
     VelocityCommand cmd;
-    const double orbit_phase = 2.0 * kPi * p.search_orbit_hz * elapsed_s;
-    cmd.forward_m_s = p.search_forward_m_s * kSearchForwardFactor;
-    cmd.right_m_s = std::sin(orbit_phase) * p.search_strafe_m_s;
     cmd.yawspeed_deg_s = p.search_yaw_rate_deg_s;
     return cmd;
 }
